@@ -36,7 +36,7 @@ The optimizer performs the following steps:
 * Merges pixels:
 
   * **Horizontally** into runs
-  * **Vertically** into stacks (optional)
+  * **Vertically** into stacks
 * Emits a clean SVG:
 
   * One `<g>` element
