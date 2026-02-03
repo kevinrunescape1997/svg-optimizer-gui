@@ -1,0 +1,135 @@
+name: Release executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v1.0.0). Only used for manual runs."
+        required: true
+        type: string
+      include_tkinterdnd2:
+        description: "Include tkinterdnd2 (drag & drop) in the build"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      PYTHON_VERSION: "3.11"
+      APP_NAME: "svg_pixel_rect_optimizer_gui"
+      INCLUDE_DND: ${{ github.event_name == 'workflow_dispatch' && inputs.include_tkinterdnd2 || 'false' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install build dependencies
+        run: python -m pip install pyinstaller
+
+      - name: Install tkinterdnd2 (optional)
+        if: env.INCLUDE_DND == 'true'
+        run: python -m pip install tkinterdnd2
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $args = @("--noconfirm","--clean","--windowed","--onefile","--name",$env:APP_NAME,"svg_optimizer_gui.py")
+          if ($env:INCLUDE_DND -eq "true") { $args += @("--collect-data","tkinterdnd2") }
+          pyinstaller @args
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item "dist\$env:APP_NAME.exe" "out\" -Force
+          Compress-Archive -Path "out\*" -DestinationPath "$env:APP_NAME-Windows.zip" -Force
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ARGS=(--noconfirm --clean --windowed --name "$APP_NAME" svg_optimizer_gui.py)
+          if [[ "$INCLUDE_DND" == "true" ]]; then ARGS+=(--collect-data tkinterdnd2); fi
+          pyinstaller "${ARGS[@]}"
+          mkdir -p out
+          cp -R "dist/${APP_NAME}.app" out/
+          zip -r "${APP_NAME}-macOS.zip" out
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ARGS=(--noconfirm --clean --windowed --onefile --name "$APP_NAME" svg_optimizer_gui.py)
+          if [[ "$INCLUDE_DND" == "true" ]]; then ARGS+=(--collect-data tkinterdnd2); fi
+          pyinstaller "${ARGS[@]}"
+          mkdir -p out
+          cp "dist/${APP_NAME}" out/
+          zip -r "${APP_NAME}-Linux.zip" out
+
+      - name: Upload build artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-Windows
+          path: ${{ env.APP_NAME }}-Windows.zip
+
+      - name: Upload build artifact (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-macOS
+          path: ${{ env.APP_NAME }}-macOS.zip
+
+      - name: Upload build artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-Linux
+          path: ${{ env.APP_NAME }}-Linux.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+
+    env:
+      APP_NAME: "svg_pixel_rect_optimizer_gui"
+      TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
+          generate_release_notes: true
+          files: |
+            ${{ env.APP_NAME }}-Windows.zip
+            ${{ env.APP_NAME }}-macOS.zip
+            ${{ env.APP_NAME }}-Linux.zip
+
