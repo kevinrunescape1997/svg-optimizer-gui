@@ -1,173 +1,40 @@
 #!/usr/bin/env python3
-"""
-svg_optimizer_gui.py
-
-Cross-platform GUI to:
-- add SVG files (file picker)
-- add a folder (recursively finds *.svg)
-- optional drag & drop (if tkinterdnd2 is installed)
-- choose output folder
-- run the same optimization (H-only or H+V) and export results
-
-Dependencies:
-- Python 3.9+
-- tkinter (usually bundled with Python on Windows/macOS; Linux may need distro package)
-- Optional: tkinterdnd2 for drag & drop support:
-    pip install tkinterdnd2
-
-Run:
-  python svg_optimizer_gui.py
-"""
-
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import threading
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import xml.etree.ElementTree as ET
+
+from svg_pixel_rect_optimizer import optimize_svg_rects
+
 
 # -----------------------------
-# Optimizer core (HV merge + namespace fix)
+# Helpers
 # -----------------------------
 
-SVG_NS = "http://www.w3.org/2000/svg"
-NS = {"svg": SVG_NS}
+def is_optimized_output(p: Path) -> bool:
+    name = p.name.lower()
+    if not name.endswith(".svg"):
+        return False
+    return "_optimized" in p.stem.lower()
 
 
-def parse_style(style: str | None) -> dict[str, str]:
-    d: dict[str, str] = {}
-    if not style:
-        return d
-    for part in style.split(";"):
-        part = part.strip()
-        if not part:
+def find_svgs_in_folder(folder: Path, recursive: bool, skip_outputs: bool) -> list[Path]:
+    it = folder.rglob("*.svg") if recursive else folder.glob("*.svg")
+    out: list[Path] = []
+    for p in it:
+        if not p.is_file():
             continue
-        if ":" in part:
-            k, v = part.split(":", 1)
-            d[k.strip()] = v.strip()
-    return d
+        if skip_outputs and is_optimized_output(p):
+            continue
+        out.append(p)
+    return sorted(out)
 
-
-def norm_opacity(op_str: str | None) -> float:
-    if not op_str:
-        return 1.0
-    try:
-        op = float(op_str)
-    except ValueError:
-        return 1.0
-    if op > 1.0:
-        op = op / 255.0
-    if op < 0.0:
-        op = 0.0
-    if op > 1.0:
-        op = 1.0
-    return op
-
-
-def fmt_opacity(op: float) -> str:
-    s = f"{op:.4f}".rstrip("0").rstrip(".")
-    return s if s else "0"
-
-
-def optimize_svg_rects(svg_in: Path, svg_out: Path, vertical_merge: bool = True) -> tuple[int, int]:
-    """
-    Returns: (rect_count_out, bytes_out)
-    """
-    tree = ET.parse(str(svg_in))
-    root = tree.getroot()
-
-    rects = root.findall(".//svg:rect", NS)
-    if not rects:
-        raise ValueError("No <rect> elements found (this tool expects pixel-rect SVGs).")
-
-    # y -> (fill,opacity) -> xs
-    rows: dict[int, dict[tuple[str, float], list[int]]] = defaultdict(lambda: defaultdict(list))
-
-    for r in rects:
-        x = int(float(r.get("x", "0")))
-        y = int(float(r.get("y", "0")))
-
-        st = parse_style(r.get("style"))
-        fill = st.get("fill", r.get("fill", "#000000"))
-        op = round(norm_opacity(st.get("opacity", r.get("opacity"))), 6)
-
-        rows[y][(fill, op)].append(x)
-
-    # Horizontal runs
-    merged_h: list[tuple[int, int, int, int, tuple[str, float]]] = []
-    for y, style_map in rows.items():
-        for stylekey, xs in style_map.items():
-            xs = sorted(xs)
-            start = prev = xs[0]
-            for x in xs[1:]:
-                if x == prev + 1:
-                    prev = x
-                else:
-                    merged_h.append((start, y, prev - start + 1, 1, stylekey))
-                    start = prev = x
-            merged_h.append((start, y, prev - start + 1, 1, stylekey))
-
-    rect_list: list[tuple[int, int, int, int, tuple[str, float]]]
-
-    # Vertical merge stacks
-    if vertical_merge:
-        cols: dict[tuple[int, int, tuple[str, float]], list[int]] = defaultdict(list)
-        for x, y, w, h, stylekey in merged_h:
-            cols[(x, w, stylekey)].append(y)
-
-        rect_list = []
-        for (x, w, stylekey), ys in cols.items():
-            ys = sorted(ys)
-            start = prev = ys[0]
-            for y in ys[1:]:
-                if y == prev + 1:
-                    prev = y
-                else:
-                    rect_list.append((x, start, w, prev - start + 1, stylekey))
-                    start = prev = y
-            rect_list.append((x, start, w, prev - start + 1, stylekey))
-    else:
-        rect_list = merged_h
-
-    # Namespace fix: register default namespace; DO NOT manually set xmlns attribute.
-    ET.register_namespace("", SVG_NS)
-
-    out_attrs: dict[str, str] = {}
-    for k in ("width", "height", "viewBox", "preserveAspectRatio"):
-        v = root.get(k)
-        if v:
-            out_attrs[k] = v
-    out_attrs["shape-rendering"] = "crispEdges"
-
-    new_root = ET.Element(f"{{{SVG_NS}}}svg", out_attrs)
-    g = ET.SubElement(new_root, f"{{{SVG_NS}}}g")
-
-    rect_list_sorted = sorted(rect_list, key=lambda t: (t[1], t[0], t[2], t[3]))
-    for x, y, w, h, (fill, op) in rect_list_sorted:
-        r_attrs = {
-            "x": str(x),
-            "y": str(y),
-            "width": str(w),
-            "height": str(h),
-            "fill": fill,
-        }
-        if abs(op - 1.0) > 1e-6:
-            r_attrs["opacity"] = fmt_opacity(op)
-        ET.SubElement(g, f"{{{SVG_NS}}}rect", r_attrs)
-
-    data = ET.tostring(new_root, encoding="utf-8", xml_declaration=True)
-    svg_out.parent.mkdir(parents=True, exist_ok=True)
-    svg_out.write_bytes(data)
-    return len(rect_list_sorted), len(data)
-
-
-# -----------------------------
-# GUI
-# -----------------------------
 
 @dataclass
 class JobResult:
@@ -177,96 +44,354 @@ class JobResult:
     message: str
 
 
-def find_svgs_in_folder(folder: Path, recursive: bool = True) -> list[Path]:
-    if recursive:
-        return sorted([p for p in folder.rglob("*.svg") if p.is_file()])
-    return sorted([p for p in folder.glob("*.svg") if p.is_file()])
-
-
-def try_enable_dnd(root: tk.Tk):
-    """
-    Optional drag & drop support. If tkinterdnd2 isn't installed, GUI still works via pickers.
-    """
+def _try_get_dnd():
     try:
-        from tkinterdnd2 import DND_FILES, TkinterDnD  # type: ignore
+        from tkinterdnd2 import TkinterDnD, DND_FILES  # type: ignore
+        return TkinterDnD, DND_FILES
     except Exception:
-        return None, None
+        return None
 
-    # Recreate root as TkinterDnD.Tk for native drops
-    new_root = TkinterDnD.Tk()
-    root.destroy()
-    return new_root, DND_FILES
 
+def _norm_drop_path(raw: str) -> str:
+    s = raw.strip()
+    if s.startswith("{") and s.endswith("}"):
+        s = s[1:-1]
+    return s.strip()
+
+
+# -----------------------------
+# System-native pickers (Linux)
+# -----------------------------
+# Contract:
+#   - return None   => system picker tool not available (caller may fallback to Tk)
+#   - return ""     => user cancelled (caller should NOT fallback; just return)
+#   - return value  => selection
+
+def system_pick_folder(title: str) -> str | None:
+    if shutil.which("zenity"):
+        p = subprocess.run(
+            ["zenity", "--file-selection", "--directory", f"--title={title}"],
+            capture_output=True,
+            text=True,
+        )
+        if p.returncode != 0:
+            return ""  # cancelled
+        return p.stdout.strip()  # can be "" if something odd, treat as cancelled by caller
+
+    if shutil.which("kdialog"):
+        p = subprocess.run(
+            ["kdialog", "--getexistingdirectory", ".", f"--title={title}"],
+            capture_output=True,
+            text=True,
+        )
+        if p.returncode != 0:
+            return ""  # cancelled
+        return p.stdout.strip()
+
+    return None  # unavailable
+
+
+# Contract for files:
+#   - return None      => unavailable (caller may fallback)
+#   - return []        => cancelled (caller should NOT fallback)
+#   - return [..paths] => selection
+
+def system_pick_files(title: str, patterns: list[str]) -> list[str] | None:
+    if shutil.which("zenity"):
+        # Example filter: "*.svg | *.svg"
+        filt = " ".join(patterns) if patterns else "*"
+        p = subprocess.run(
+            [
+                "zenity",
+                "--file-selection",
+                "--multiple",
+                "--separator=\n",
+                f"--title={title}",
+                f"--file-filter={filt} | {filt}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if p.returncode != 0:
+            return []  # cancelled
+        files = [s for s in p.stdout.splitlines() if s.strip()]
+        return files
+
+    if shutil.which("kdialog"):
+        filt = " ".join(patterns) if patterns else "*"
+        p = subprocess.run(
+            [
+                "kdialog",
+                "--getopenfilename",
+                ".",
+                filt,
+                "--multiple",
+                "--separate-output",
+                f"--title={title}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if p.returncode != 0:
+            return []  # cancelled
+        files = [s for s in p.stdout.splitlines() if s.strip()]
+        return files
+
+    return None  # unavailable
+
+
+# -----------------------------
+# Scrollable container
+# -----------------------------
+
+class ScrollableFrame(ttk.Frame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+
+        self.canvas = tk.Canvas(self, highlightthickness=0)
+
+        self.vsb = tk.Scrollbar(self, orient="vertical", width=16, command=self.canvas.yview)
+        self.hsb = tk.Scrollbar(self, orient="horizontal", width=16, command=self.canvas.xview)
+        self.sizegrip = ttk.Sizegrip(self)
+
+        self.canvas.configure(yscrollcommand=self.vsb.set, xscrollcommand=self.hsb.set)
+
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.vsb.grid(row=0, column=1, sticky="ns")
+        self.hsb.grid(row=1, column=0, sticky="ew")
+        self.sizegrip.grid(row=1, column=1, sticky="se")
+
+        self.inner = ttk.Frame(self.canvas)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+
+        self.inner.bind("<Configure>", self._on_inner_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+        self.canvas.bind("<Enter>", self._bind_mousewheel)
+        self.canvas.bind("<Leave>", self._unbind_mousewheel)
+
+    def _on_inner_configure(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._clamp_view_if_no_scroll()
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self._win, width=max(event.width, self.inner.winfo_reqwidth()))
+        self.canvas.coords(self._win, 0, 0)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._clamp_view_if_no_scroll()
+
+    def _clamp_view_if_no_scroll(self):
+        bbox = self.canvas.bbox("all")
+        if not bbox:
+            return
+        content_w = bbox[2] - bbox[0]
+        content_h = bbox[3] - bbox[1]
+        canvas_w = max(1, self.canvas.winfo_width())
+        canvas_h = max(1, self.canvas.winfo_height())
+        if content_h <= canvas_h:
+            self.canvas.yview_moveto(0.0)
+        if content_w <= canvas_w:
+            self.canvas.xview_moveto(0.0)
+
+    def _on_mousewheel(self, event):
+        if event.state & 0x0001:
+            self.canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        else:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_mousewheel_linux(self, event):
+        delta = -1 if getattr(event, "num", None) == 4 else 1
+        self.canvas.yview_scroll(delta, "units")
+
+    def _bind_mousewheel(self, _event=None):
+        self.canvas.bind("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind("<Button-4>", self._on_mousewheel_linux)
+        self.canvas.bind("<Button-5>", self._on_mousewheel_linux)
+
+    def _unbind_mousewheel(self, _event=None):
+        self.canvas.unbind("<MouseWheel>")
+        self.canvas.unbind("<Button-4>")
+        self.canvas.unbind("<Button-5>")
+
+
+# -----------------------------
+# App
+# -----------------------------
 
 class App:
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, dnd_files):
         self.root = root
+        self.dnd_files = dnd_files
+
         self.root.title("SVG Pixel-Rect Optimizer")
-        self.root.geometry("900x520")
+        self.root.update_idletasks()
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        w = min(1750, int(sw * 0.95))
+        h = min(870, int(sh * 0.90))
+        self.root.geometry(f"{w}x{h}")
+
+        self._setup_theme()
+        self._setup_toggle_styles()
 
         self.files: list[Path] = []
+
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "optimized_svgs"))
         self.recursive = tk.BooleanVar(value=True)
-        self.vertical_merge = tk.BooleanVar(value=True)
-        self.preserve_tree = tk.BooleanVar(value=False)  # preserve relative folder structure under output
+        self.preserve_tree = tk.BooleanVar(value=True)
+        self.preserve_names = tk.BooleanVar(value=True)
+        self.skip_outputs = tk.BooleanVar(value=True)
 
         self.status = tk.StringVar(value="Ready.")
         self.progress = tk.DoubleVar(value=0.0)
 
+        self._drop_bg = "#5e5e5e"
+        self._drop_bg_hover = "#707070"
+
         self._build_ui()
+        self._enable_dnd_if_available()
+
+    def _setup_theme(self):
+        try:
+            style = ttk.Style(self.root)
+            for t in ("clam", "alt", "default"):
+                if t in style.theme_names():
+                    style.theme_use(t)
+                    break
+        except Exception:
+            pass
+
+    def _setup_toggle_styles(self):
+        self._tog_style = "OnOff.TCheckbutton"
+        try:
+            style = ttk.Style(self.root)
+            style.layout(
+                self._tog_style,
+                [("Checkbutton.padding", {"sticky": "nswe", "children": [
+                    ("Checkbutton.label", {"sticky": "nswe"})
+                ]})]
+            )
+            style.configure(self._tog_style, padding=(10, 4))
+            style.map(
+                self._tog_style,
+                background=[
+                    ("active", "selected", "#00b980"),
+                    ("active", "!selected", "#e07000"),
+                    ("selected", "#009E73"),
+                    ("!selected", "#D55E00"),
+                ],
+                foreground=[
+                    ("selected", "#ffffff"),
+                    ("!selected", "#ffffff"),
+                ],
+                relief=[
+                    ("active", "solid"),
+                    ("selected", "solid"),
+                    ("!selected", "solid"),
+                ],
+                borderwidth=[
+                    ("selected", 1),
+                    ("!selected", 1),
+                ],
+            )
+        except Exception:
+            pass
+
 
     def _build_ui(self):
-        # Top controls
-        top = ttk.Frame(self.root, padding=10)
-        top.pack(fill="x")
+        container = ttk.Frame(self.root)
+        container.pack(fill="both", expand=True)
 
+        self.sc = ScrollableFrame(container)
+        self.sc.pack(fill="both", expand=True)
+
+        top = ttk.Frame(self.sc.inner, padding=10)
+        top.pack(fill="x")
         ttk.Button(top, text="Add SVG Files…", command=self.add_files).pack(side="left")
         ttk.Button(top, text="Add Folder…", command=self.add_folder).pack(side="left", padx=(8, 0))
-        ttk.Button(top, text="Clear List", command=self.clear_list).pack(side="left", padx=(8, 0))
 
-        ttk.Separator(top, orient="vertical").pack(side="left", fill="y", padx=12)
-
-        ttk.Checkbutton(top, text="Vertical merge (HV)", variable=self.vertical_merge).pack(side="left")
-        ttk.Checkbutton(top, text="Recursive folder scan", variable=self.recursive).pack(side="left", padx=(10, 0))
-        ttk.Checkbutton(top, text="Preserve folder structure", variable=self.preserve_tree).pack(side="left", padx=(10, 0))
-
-        # Middle: listbox + drop zone
-        mid = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        mid = ttk.Frame(self.sc.inner, padding=(10, 0, 10, 10))
         mid.pack(fill="both", expand=True)
 
         left = ttk.Frame(mid)
         left.pack(side="left", fill="both", expand=True)
 
-        ttk.Label(left, text="Files to process:").pack(anchor="w")
+        self.drop_label = tk.Label(
+            left,
+            text=(
+                "Drop SVG files or folders here.\n\n"
+                "Tip: Drop a folder to add all SVGs.\n"
+                "You can also drop a folder onto the Output field to set it."
+            ),
+            justify="center",
+            anchor="center",
+            padx=12,
+            pady=12,
+            bd=2,
+            relief="groove",
+            bg=self._drop_bg,
+            fg="#ffffff",
+            cursor="hand2",
+        )
+        self.drop_label.pack(fill="x", pady=(6, 0))
 
-        self.listbox = tk.Listbox(left, selectmode=tk.EXTENDED)
-        self.listbox.pack(fill="both", expand=True, pady=(6, 0))
+        self.drop_label.bind("<Enter>", lambda _e: self._set_drop_hover(True))
+        self.drop_label.bind("<Leave>", lambda _e: self._set_drop_hover(False))
+
+        lb_wrap = ttk.Frame(left)
+        lb_wrap.pack(fill="both", expand=True, pady=(6, 0))
+
+        SCROLLBAR_SIZE = 16
+        lb_wrap.rowconfigure(0, weight=1)
+        lb_wrap.columnconfigure(1, weight=1)
+
+        lb_vsb = tk.Scrollbar(lb_wrap, orient="vertical", width=SCROLLBAR_SIZE)
+        lb_vsb.grid(row=0, column=0, sticky="ns")
+
+        self.listbox = tk.Listbox(lb_wrap, selectmode=tk.EXTENDED)
+        self.listbox.grid(row=0, column=1, sticky="nsew")
+
+        lb_hsb = tk.Scrollbar(lb_wrap, orient="horizontal", width=SCROLLBAR_SIZE)
+        lb_hsb.grid(row=1, column=1, sticky="ew")
+
+        ttk.Frame(lb_wrap, width=SCROLLBAR_SIZE, height=SCROLLBAR_SIZE).grid(row=1, column=0)
+
+        self.listbox.configure(yscrollcommand=lb_vsb.set, xscrollcommand=lb_hsb.set)
+        lb_vsb.configure(command=self.listbox.yview)
+        lb_hsb.configure(command=self.listbox.xview)
 
         btns = ttk.Frame(left)
         btns.pack(fill="x", pady=(6, 0))
         ttk.Button(btns, text="Remove Selected", command=self.remove_selected).pack(side="left")
+        ttk.Button(btns, text="Clear Entire List", command=self.clear_list).pack(side="left", padx=(8, 0))
 
-        right = ttk.Frame(mid, width=260)
-        right.pack(side="left", fill="y", padx=(12, 0))
-        right.pack_propagate(False)
-
-        ttk.Label(right, text="Drag & drop zone:").pack(anchor="w")
-        self.drop = tk.Text(right, height=8, wrap="word")
-        self.drop.insert("1.0", "Drop SVG files here (optional).\n\nIf drag & drop doesn't work:\nuse “Add SVG Files…” or “Add Folder…”.")
-        self.drop.configure(state="disabled")
-        self.drop.pack(fill="x", pady=(6, 0))
-
-        # Output folder
-        out = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        out = ttk.Frame(self.sc.inner, padding=(10, 0, 10, 10))
         out.pack(fill="x")
 
         ttk.Label(out, text="Output folder:").pack(side="left")
         self.out_entry = ttk.Entry(out, textvariable=self.output_dir)
         self.out_entry.pack(side="left", fill="x", expand=True, padx=(8, 0))
         ttk.Button(out, text="Choose…", command=self.choose_output_dir).pack(side="left", padx=(8, 0))
+        ttk.Button(out, text="Up", command=self.output_dir_up).pack(side="left", padx=(8, 0))
 
-        # Bottom: run + progress + status
-        bottom = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        toggles = ttk.Frame(self.sc.inner, padding=(10, 0, 10, 10))
+        toggles.pack(fill="x")
+
+        ttk.Checkbutton(toggles, text="Recursive folder scan", variable=self.recursive,
+                        style=self._tog_style).pack(side="left")
+        ttk.Checkbutton(toggles, text="Preserve folder structure", variable=self.preserve_tree,
+                        style=self._tog_style).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(toggles, text="Preserve file names", variable=self.preserve_names,
+                        style=self._tog_style).pack(side="left", padx=(8, 0))
+        ttk.Checkbutton(toggles, text="Skip *_optimized*.svg in searches", variable=self.skip_outputs,
+                        style=self._tog_style).pack(side="left", padx=(8, 0))
+
+        ttk.Label(self.sc.inner, textvariable=self.status, padding=(10, 6, 10, 6)).pack(fill="x")
+
+        bottom = ttk.Frame(self.sc.inner, padding=(10, 0, 10, 10))
         bottom.pack(fill="x")
 
         self.run_btn = ttk.Button(bottom, text="Optimize", command=self.run)
@@ -274,10 +399,69 @@ class App:
 
         self.pb = ttk.Progressbar(bottom, variable=self.progress, maximum=100.0)
         self.pb.pack(side="left", fill="x", expand=True, padx=(10, 0))
+    def _set_drop_hover(self, on: bool) -> None:
+        if not hasattr(self, "drop_label"):
+            return
+        self.drop_label.configure(
+            bg=self._drop_bg_hover if on else self._drop_bg,
+            relief="ridge" if on else "groove",
+        )
 
-        ttk.Label(self.root, textvariable=self.status, padding=(10, 0, 10, 10)).pack(fill="x")
+    # -----------------------------
+    # Drag & drop
+    # -----------------------------
 
-    # ---------- file list management ----------
+    def _enable_dnd_if_available(self):
+        if self.dnd_files is None:
+            self.status.set("Ready. (Drag & drop disabled: install tkinterdnd2 to enable.)")
+            return
+
+        for widget in (self.listbox, self.drop_label, self.out_entry):
+            try:
+                widget.drop_target_register(self.dnd_files)
+            except Exception:
+                pass
+
+        try:
+            self.listbox.dnd_bind("<<Drop>>", self._on_drop_inputs)
+        except Exception:
+            pass
+        try:
+            self.drop_label.dnd_bind("<<Drop>>", self._on_drop_inputs)
+        except Exception:
+            pass
+        try:
+            self.out_entry.dnd_bind("<<Drop>>", self._on_drop_output_dir)
+        except Exception:
+            pass
+
+        self.status.set("Ready.")
+
+    def _drop_paths(self, event) -> list[Path]:
+        raw_list = self.root.tk.splitlist(event.data)
+        paths: list[Path] = []
+        for raw in raw_list:
+            s = _norm_drop_path(str(raw))
+            if s:
+                paths.append(Path(s))
+        return paths
+
+    def _on_drop_inputs(self, event):
+        self._handle_input_paths(self._drop_paths(event))
+        return "break"
+
+    def _on_drop_output_dir(self, event):
+        for p in self._drop_paths(event):
+            p = p.expanduser()
+            if p.is_dir():
+                self.output_dir.set(str(p.resolve()))
+                self.status.set("Output folder set via drag & drop.")
+                break
+        return "break"
+
+    # -----------------------------
+    # File list management
+    # -----------------------------
 
     def _refresh_listbox(self):
         self.listbox.delete(0, tk.END)
@@ -288,36 +472,107 @@ class App:
     def _add_paths(self, paths: list[Path]):
         added = 0
         existing = set(self.files)
+
         for p in paths:
-            p = p.resolve()
+            try:
+                p = p.expanduser().resolve()
+            except Exception:
+                p = p.expanduser()
+
             if p.suffix.lower() != ".svg":
                 continue
-            if p.is_file() and p not in existing:
-                self.files.append(p)
-                existing.add(p)
-                added += 1
+            if not p.is_file():
+                continue
+            if p in existing:
+                continue
+            if self.skip_outputs.get() and is_optimized_output(p):
+                continue
+
+            self.files.append(p)
+            existing.add(p)
+            added += 1
+
         if added:
             self.files.sort()
         self._refresh_listbox()
 
+    def _handle_input_paths(self, paths: list[Path]):
+        files: list[Path] = []
+        folders: list[Path] = []
+
+        for p in paths:
+            p = p.expanduser()
+            if p.is_dir():
+                folders.append(p)
+            elif p.is_file():
+                files.append(p)
+
+        if folders:
+            for folder in folders:
+                svgs = find_svgs_in_folder(folder, recursive=self.recursive.get(), skip_outputs=self.skip_outputs.get())
+                self._add_paths(svgs)
+
+        if files:
+            self._add_paths(files)
+
+    # -----------------------------
+    # Pickers (prefer system, fallback to Tk only when unavailable)
+    # -----------------------------
+
     def add_files(self):
-        filenames = filedialog.askopenfilenames(
-            title="Select SVG files",
-            filetypes=[("SVG files", "*.svg"), ("All files", "*.*")]
-        )
-        if not filenames:
+        picked = system_pick_files("Select SVG files", patterns=["*.svg"])
+        if picked is None:
+            # System picker unavailable -> fallback
+            picked = list(filedialog.askopenfilenames(
+                title="Select SVG files",
+                filetypes=[("SVG files", "*.svg"), ("All files", "*.*")],
+            ))
+        elif picked == []:
+            # User cancelled system picker -> do nothing
             return
-        self._add_paths([Path(f) for f in filenames])
+
+        if picked:
+            self._add_paths([Path(f) for f in picked])
 
     def add_folder(self):
-        folder = filedialog.askdirectory(title="Select a folder containing SVGs")
+        folder = system_pick_folder("Select a folder containing SVGs")
+        if folder is None:
+            folder = filedialog.askdirectory(title="Select a folder containing SVGs")
+        elif folder == "":
+            return  # cancelled
+
         if not folder:
             return
-        svgs = find_svgs_in_folder(Path(folder), recursive=self.recursive.get())
+
+        svgs = find_svgs_in_folder(Path(folder), recursive=self.recursive.get(), skip_outputs=self.skip_outputs.get())
         if not svgs:
             messagebox.showinfo("No SVGs found", "No .svg files were found in the selected folder.")
             return
         self._add_paths(svgs)
+
+    def choose_output_dir(self):
+        folder = system_pick_folder("Choose output folder")
+        if folder is None:
+            folder = filedialog.askdirectory(title="Choose output folder")
+        elif folder == "":
+            return  # cancelled
+
+        if folder:
+            self.output_dir.set(str(Path(folder)))
+            self.status.set("Output folder set.")
+
+    # -----------------------------
+    # Output dir
+    # -----------------------------
+
+    def output_dir_up(self):
+        try:
+            cur = Path(self.output_dir.get()).expanduser().resolve()
+            parent = cur.parent if cur.parent != cur else cur
+            self.output_dir.set(str(parent))
+            self.status.set("Output folder moved up one level.")
+        except Exception:
+            pass
 
     def clear_list(self):
         self.files = []
@@ -331,14 +586,9 @@ class App:
         self.files = [p for i, p in enumerate(self.files) if i not in sel_set]
         self._refresh_listbox()
 
-    def choose_output_dir(self):
-        folder = filedialog.askdirectory(title="Choose output folder")
-        if not folder:
-            return
-        self.output_dir.set(str(Path(folder)))
-        self.status.set("Output folder set.")
-
-    # ---------- processing ----------
+    # -----------------------------
+    # Processing
+    # -----------------------------
 
     def run(self):
         if not self.files:
@@ -356,15 +606,12 @@ class App:
         self.progress.set(0.0)
         self.status.set("Running...")
 
-        # Run in background thread to keep UI responsive
-        t = threading.Thread(target=self._run_worker, args=(out_dir,), daemon=True)
-        t.start()
+        threading.Thread(target=self._run_worker, args=(out_dir,), daemon=True).start()
 
     def _run_worker(self, out_dir: Path):
-        vertical = self.vertical_merge.get()
+        vertical = True
         preserve_tree = self.preserve_tree.get()
 
-        # Establish a common root for relative preservation (best-effort)
         common_root = None
         if preserve_tree:
             try:
@@ -377,15 +624,18 @@ class App:
 
         for idx, inp in enumerate(self.files, start=1):
             try:
-                # Output filename suffix
-                suffix = "_optimized_hv" if vertical else "_optimized_h"
-                out_name = inp.stem + suffix + inp.suffix
+                if self.preserve_names.get():
+                    out_name = inp.name
+                else:
+                    out_name = inp.stem + "_optimized" + inp.suffix
 
                 if preserve_tree and common_root is not None:
                     rel_parent = inp.parent.relative_to(common_root)
                     out_path = out_dir / rel_parent / out_name
                 else:
                     out_path = out_dir / out_name
+
+                out_path.parent.mkdir(parents=True, exist_ok=True)
 
                 rect_count, bytes_out = optimize_svg_rects(inp, out_path, vertical_merge=vertical)
                 results.append(JobResult(inp, out_path, True, f"OK | rects={rect_count:,} | bytes={bytes_out:,}"))
@@ -402,11 +652,11 @@ class App:
         ok = sum(1 for r in results if r.ok)
         fail = len(results) - ok
 
-        # Show a short summary + write a log file
         log_path = out_dir / "svg_optimizer_log.txt"
-        lines = []
-        for r in results:
-            lines.append(f"{'OK  ' if r.ok else 'FAIL'} | {r.input_path} -> {r.output_path} | {r.message}")
+        lines = [
+            f"{'OK  ' if r.ok else 'FAIL'} | {r.input_path} -> {r.output_path} | {r.message}"
+            for r in results
+        ]
         try:
             log_path.write_text("\n".join(lines), encoding="utf-8")
         except Exception:
@@ -417,69 +667,23 @@ class App:
 
         self.status.set(f"Done. OK: {ok}, Failed: {fail}. Log: {log_path}")
         if fail:
-            messagebox.showwarning(
-                "Completed with errors",
-                f"OK: {ok}\nFailed: {fail}\n\nSee log:\n{log_path}"
-            )
+            messagebox.showwarning("Completed with errors", f"OK: {ok}\nFailed: {fail}\n\nSee log:\n{log_path}")
         else:
-            messagebox.showinfo(
-                "Completed",
-                f"Processed {ok} file(s).\n\nOutput:\n{out_dir}\n\nLog:\n{log_path}"
-            )
+            messagebox.showinfo("Completed", f"Processed {ok} file(s).\n\nOutput:\n{out_dir}\n\nLog:\n{log_path}")
 
 
 def main():
-    root = tk.Tk()
-
-    # Optional DnD enablement: if tkinterdnd2 present, replace root
-    new_root, dnd_files = try_enable_dnd(root)
-    if new_root is not None:
-        root = new_root
-
-    app = App(root)
-
-    # If DnD available, register drop target on the drop text widget
-    if new_root is not None and dnd_files is not None:
-        from tkinterdnd2 import DND_FILES  # type: ignore
-
-        def on_drop(event):
-            # event.data contains a Tcl-style list of paths; handle braces/spaces
-            raw = event.data
-            # Basic parsing: split respecting braces
-            paths = []
-            cur = ""
-            in_brace = False
-            for ch in raw:
-                if ch == "{":
-                    in_brace = True
-                    cur = ""
-                elif ch == "}":
-                    in_brace = False
-                    if cur:
-                        paths.append(cur)
-                        cur = ""
-                elif ch.isspace() and not in_brace:
-                    if cur:
-                        paths.append(cur)
-                        cur = ""
-                else:
-                    cur += ch
-            if cur:
-                paths.append(cur)
-
-            app._add_paths([Path(p) for p in paths])
-            return "break"
-
-        app.drop.configure(state="normal")
-        app.drop.delete("1.0", tk.END)
-        app.drop.insert("1.0", "Drop SVG files here.")
-        app.drop.configure(state="disabled")
-
-        app.drop.drop_target_register(DND_FILES)
-        app.drop.dnd_bind("<<Drop>>", on_drop)
-
+    dnd = _try_get_dnd()
+    if dnd is None:
+        root = tk.Tk()
+        App(root, None)
+    else:
+        TkinterDnD, DND_FILES = dnd
+        root = TkinterDnD.Tk()
+        App(root, DND_FILES)
     root.mainloop()
 
 
 if __name__ == "__main__":
     main()
+

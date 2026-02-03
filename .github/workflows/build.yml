@@ -1,3 +1,4 @@
+# .github/workflows/build.yml
 name: Build executables
 
 on:
@@ -36,13 +37,13 @@ jobs:
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Linux system deps (Tk)
+      - name: Linux system deps (Tk + AppStream)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y python3-tk
+          sudo apt-get install -y python3-tk appstream
 
       - name: Install build dependencies
         run: python -m pip install pyinstaller pillow
@@ -109,7 +110,7 @@ jobs:
 
           cp "dist/${APP_NAME}" "$APPDIR/usr/bin/${APP_NAME}"
 
-          # Create a simple icon (keeps repo lightweight; replace with a real PNG later if desired)
+          # Create a simple icon (replace with a real icon later if desired)
           python - <<'PY'
           from PIL import Image, ImageDraw
           img = Image.new("RGBA", (256, 256), (32, 32, 32, 255))
@@ -120,24 +121,21 @@ jobs:
           PY
           cp icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png"
 
-cat > "$APPDIR/usr/share/applications/${APP_NAME}.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=SVG Pixel-Rect Optimizer
-Exec=${APP_NAME}
-Icon=${APP_NAME}
-Categories=Utility;Graphics;
-Terminal=false
-EOF
+          cat > "$APPDIR/usr/share/applications/${APP_NAME}.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=SVG Pixel-Rect Optimizer
+          Exec=${APP_NAME}
+          Icon=${APP_NAME}
+          Categories=Utility;Graphics;
+          Terminal=false
+          EOF
 
-# appimagetool expects a desktop file at the AppDir root
-cp "$APPDIR/usr/share/applications/${APP_NAME}.desktop" "$APPDIR/${APP_NAME}.desktop"
+          # appimagetool expects these at the AppDir root
+          cp "$APPDIR/usr/share/applications/${APP_NAME}.desktop" "$APPDIR/${APP_NAME}.desktop"
+          cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png" "$APPDIR/${APP_NAME}.png"
 
-# keep an icon at the AppDir root as well (helps appimagetool/launchers)
-cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png" "$APPDIR/${APP_NAME}.png"
-
-ln -sf "usr/bin/${APP_NAME}" "$APPDIR/AppRun"
-
+          ln -sf "usr/bin/${APP_NAME}" "$APPDIR/AppRun"
 
           curl -L -o appimagetool.AppImage \
             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
