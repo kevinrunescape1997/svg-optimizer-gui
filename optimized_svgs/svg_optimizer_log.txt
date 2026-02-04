@@ -1,0 +1,1 @@
+OK   | /home/kev/Downloads/2024_AG_0001_Crypt_Large.svg -> /home/kev/svg-optimizer-gui/optimized_svgs/2024_AG_0001_Crypt_Large.svg | OK | paths=6,546 | svg=485,792 bytes

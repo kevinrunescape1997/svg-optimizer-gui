@@ -10,7 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from svg_pixel_rect_optimizer import optimize_svg_rects_bytes, write_svgz
+from svg_pixel_rect_optimizer import optimize_svg_rects_bytes, write_svgz, optimize_svg_paths_bytes
 
 
 # -----------------------------
@@ -246,10 +246,16 @@ class App:
         self.preserve_names = tk.BooleanVar(value=True)
         self.skip_outputs = tk.BooleanVar(value=True)
 
-        # Output mode:
-        #   "svg"  -> write optimized .svg only
-        #   "svgz" -> write optimized .svg and also .svgz (gzip level 9)
+        # Output format:
+        #   "svg"        -> write optimized .svg only
+        #   "svgz"       -> write optimized .svg and also .svgz (gzip level 9)
+        #   "svgz_only"  -> write optimized .svgz only
         self.output_mode = tk.StringVar(value="svg")
+
+        # Shape mode:
+        #   False -> rects mode (current behavior)
+        #   True  -> connected paths mode
+        self.use_paths = tk.BooleanVar(value=True)
 
         self.status = tk.StringVar(value="Ready.")
         self.progress = tk.DoubleVar(value=0.0)
@@ -485,6 +491,22 @@ class App:
             style=self._radio_style,
         ).pack(side="left", padx=(8, 0))
 
+        ttk.Radiobutton(
+            fmt,
+            text="Optimized SVGZ (.svgz)",
+            value="svgz_only",
+            variable=self.output_mode,
+            style=self._radio_style,
+        ).pack(side="left", padx=(8, 0))
+
+        # Shape mode toggle: connected paths vs rects
+        ttk.Checkbutton(
+            fmt_wrap,
+            text="Merge touching like-pixels into connected paths (Otherwise create stacks and rows)",
+            variable=self.use_paths,
+            style=self._tog_style,
+        ).pack(anchor="w", pady=(8, 0))
+
         ttk.Label(self.sc.inner, textvariable=self.status, padding=(10, 6, 10, 6)).pack(fill="x")
 
         bottom = ttk.Frame(self.sc.inner, padding=(10, 0, 10, 10))
@@ -716,7 +738,10 @@ class App:
     def _run_worker(self, out_dir: Path):
         vertical = True  # keep behavior consistent with your previous GUI
         preserve_tree = self.preserve_tree.get()
-        want_svgz = self.output_mode.get() == "svgz"
+        mode = self.output_mode.get()
+        write_svg = mode in ("svg", "svgz")
+        write_svgz_flag = mode in ("svgz", "svgz_only")
+        use_paths = self.use_paths.get()
 
         common_root = None
         if preserve_tree:
@@ -729,7 +754,9 @@ class App:
         total = len(self.files)
 
         for idx, inp in enumerate(self.files, start=1):
-            out_svg = out_dir / (inp.name if self.preserve_names.get() else (inp.stem + "_optimized" + inp.suffix))
+            suffix = "_optimized_paths" if use_paths else "_optimized"
+            out_name = inp.name if self.preserve_names.get() else (inp.stem + suffix + inp.suffix)
+            out_svg = out_dir / out_name
             if preserve_tree and common_root is not None:
                 try:
                     rel_parent = inp.parent.relative_to(common_root)
@@ -742,12 +769,20 @@ class App:
             try:
                 out_svg.parent.mkdir(parents=True, exist_ok=True)
 
-                svg_bytes, rect_count = optimize_svg_rects_bytes(inp, vertical_merge=vertical)
-                out_svg.write_bytes(svg_bytes)
+                # Generate bytes
+                if use_paths:
+                    svg_bytes, path_count = optimize_svg_paths_bytes(inp)
+                    msg = f"OK | paths={path_count:,}"
+                else:
+                    svg_bytes, rect_count = optimize_svg_rects_bytes(inp, vertical_merge=vertical)
+                    msg = f"OK | rects={rect_count:,}"
 
-                msg = f"OK | rects={rect_count:,} | svg={len(svg_bytes):,} bytes"
+                # Write outputs based on selection
+                if write_svg:
+                    out_svg.write_bytes(svg_bytes)
+                    msg += f" | svg={len(svg_bytes):,} bytes"
 
-                if want_svgz:
+                if write_svgz_flag:
                     out_svgz = out_svg.with_suffix(out_svg.suffix + "z")
                     bytes_svgz = write_svgz(svg_bytes, out_svgz, compresslevel=9)
                     msg += f" | svgz={bytes_svgz:,} bytes"
@@ -759,7 +794,8 @@ class App:
 
             pct = (idx / total) * 100.0
             self.root.after(0, self.progress.set, pct)
-            self.root.after(0, self.status.set, f"Processing {idx}/{total}: {inp.name}")
+            mode_txt = "paths" if use_paths else "rects"
+            self.root.after(0, self.status.set, f"Processing {idx}/{total} ({mode_txt}): {inp.name}")
 
         self.root.after(0, self._finish, results, out_dir)
 
