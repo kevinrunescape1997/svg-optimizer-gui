@@ -65,7 +65,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $args = @("--noconfirm","--clean","--windowed","--onefile","--name",$env:APP_NAME,"vector_pixel_tools_launcher.py")
+          $args = @(
+            "--noconfirm","--clean","--windowed","--onefile",
+            "--name",$env:APP_NAME,
+            "--hidden-import","GUI_bitmap_converter",
+            "--hidden-import","GUI_svg_optimizer",
+            "--hidden-import","GUI_svg_exporter",
+            "--hidden-import","bitmap_svg_converter",
+            "--hidden-import","pixel_svg_optimizer",
+            "--hidden-import","svg_exporter",
+            "vector_pixel_tools_launcher.py"
+          )
           if ($env:INCLUDE_DND -eq "true") {
             $args += @("--hidden-import","tkinterdnd2","--collect-data","tkinterdnd2","--collect-binaries","tkinterdnd2")
           }
@@ -86,7 +96,14 @@ jobs:
         run: |
           set -euxo pipefail
 
-          ARGS=(--noconfirm --clean --windowed --name "$APP_NAME" vector_pixel_tools_launcher.py)
+          ARGS=(--noconfirm --clean --windowed --name "$APP_NAME"
+                --hidden-import GUI_bitmap_converter
+                --hidden-import GUI_svg_optimizer
+                --hidden-import GUI_svg_exporter
+                --hidden-import bitmap_svg_converter
+                --hidden-import pixel_svg_optimizer
+                --hidden-import svg_exporter
+                vector_pixel_tools_launcher.py)
           if [[ "$INCLUDE_DND" == "true" ]]; then
             ARGS+=(--hidden-import tkinterdnd2 --collect-data tkinterdnd2 --collect-binaries tkinterdnd2)
           fi
@@ -109,7 +126,14 @@ jobs:
         run: |
           set -euxo pipefail
 
-          ARGS=(--noconfirm --clean --windowed --onefile --name "$APP_NAME" vector_pixel_tools_launcher.py)
+          ARGS=(--noconfirm --clean --windowed --onefile --name "$APP_NAME"
+                --hidden-import GUI_bitmap_converter
+                --hidden-import GUI_svg_optimizer
+                --hidden-import GUI_svg_exporter
+                --hidden-import bitmap_svg_converter
+                --hidden-import pixel_svg_optimizer
+                --hidden-import svg_exporter
+                vector_pixel_tools_launcher.py)
           if [[ "$INCLUDE_DND" == "true" ]]; then
             ARGS+=(--hidden-import tkinterdnd2 --collect-data tkinterdnd2 --collect-binaries tkinterdnd2)
           fi

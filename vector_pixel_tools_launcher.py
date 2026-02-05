@@ -2,23 +2,19 @@
 from __future__ import annotations
 
 """
-Simple launcher GUI with three buttons:
-- Open Bitmap → SVG Converter interface
-- Open SVG Pixelart Optimizer interface
-- Open SVG → EPS/PDF/TIFF/PNG Exporter interface
+Launcher GUI with three buttons:
+- Open Bitmap → SVG Converter
+- Open SVG Pixel Optimizer
+- Open SVG → EPS/PDF/TIFF/PNG Exporter
 
-Starts each tool in its own process for isolation and simplicity.
-Place this file alongside:
-- GUI_bitmap_converter.py
-- GUI_svg_optimizer.py
-- GUI_svg_exporter.py
+Starts each tool in its own process:
+- Frozen (PyInstaller): spawns the same executable with a --run=<tool> flag
+- Unfrozen (dev): runs the corresponding .py script with the system Python
 
 Single-instance behavior:
 - The launcher listens on 127.0.0.1:51262 for 'RAISE' messages.
 - If another instance tries to start, it sends 'RAISE' to the running instance and exits.
-- The main optimizer and converter GUIs also send 'RAISE' before attempting to start a new launcher.
-
-Styled to match the dark theme of the GUIs with consistent button styles.
+- The GUIs also send 'RAISE' before attempting to start a new launcher.
 """
 
 import subprocess
@@ -39,21 +35,44 @@ DARK_TEXT = "#ADBAC7"
 DARK_BORDER = "#3A4149"
 SMALL_MARGIN = 8
 
+# Map tool aliases to script filenames (used in dev/unfrozen mode)
+TOOL_SCRIPT_MAP = {
+    "bitmap": "GUI_bitmap_converter.py",
+    "optimizer": "GUI_svg_optimizer.py",
+    "exporter": "GUI_svg_exporter.py",
+}
+
 
 def _script_path(name: str) -> Path:
     here = Path(__file__).resolve().parent
     return (here / name).resolve()
 
 
-def _run_script(script: Path):
-    if not script.exists():
-        messagebox.showerror("Not found", f"Could not find:\n{script}")
-        return False
+def _run_tool(tool: str) -> bool:
+    """
+    Start the requested tool in a new process.
+
+    - In frozen mode (PyInstaller/AppImage), spawn the SAME executable with --run=<tool>.
+    - In dev/unfrozen mode, run the corresponding .py script with the system Python.
+    """
     try:
-        subprocess.Popen([sys.executable, str(script)], close_fds=True)
-        return True
+        if getattr(sys, "frozen", False):
+            # Spawn a new instance of this executable with a flag that selects the tool.
+            subprocess.Popen([sys.executable, f"--run={tool}"], close_fds=True)
+            return True
+        else:
+            script_name = TOOL_SCRIPT_MAP.get(tool)
+            if not script_name:
+                messagebox.showerror("Unknown tool", f"Unknown tool: {tool}")
+                return False
+            script = _script_path(script_name)
+            if not script.exists():
+                messagebox.showerror("Not found", f"Could not find:\n{script}")
+                return False
+            subprocess.Popen([sys.executable, str(script)], close_fds=True)
+            return True
     except Exception as e:
-        messagebox.showerror("Launch failed", f"Failed to launch:\n{script}\n\n{e}")
+        messagebox.showerror("Launch failed", f"Failed to launch '{tool}':\n{e}")
         return False
 
 
@@ -140,7 +159,48 @@ def _setup_theme(root: tk.Tk):
         pass
 
 
+def _dispatch_run_flag() -> bool:
+    """
+    If invoked with --run=<tool>, import the selected GUI and run it in this process.
+    Returns True if a tool was dispatched, False otherwise.
+    """
+    mode = None
+    for i, arg in enumerate(sys.argv[1:]):
+        if arg.startswith("--run="):
+            mode = arg.split("=", 1)[1].strip()
+            break
+        if arg == "--run" and i + 2 <= len(sys.argv):
+            mode = sys.argv[i + 2]
+            break
+    if not mode:
+        return False
+
+    try:
+        if mode == "bitmap":
+            from GUI_bitmap_converter import main as run
+            run()
+            return True
+        elif mode == "optimizer":
+            from GUI_svg_optimizer import main as run
+            run()
+            return True
+        elif mode == "exporter":
+            from GUI_svg_exporter import main as run
+            run()
+            return True
+        else:
+            messagebox.showerror("Unknown tool", f"Unknown tool: {mode}")
+            return False
+    except Exception as e:
+        messagebox.showerror("Launch failed", f"Failed to start '{mode}':\n{e}")
+        return False
+
+
 def main():
+    # If called with --run=<tool>, dispatch directly to that GUI.
+    if _dispatch_run_flag():
+        return
+
     root = tk.Tk()
     root.title("Pixel Tools Launcher")
     root.geometry("600x200")
@@ -155,29 +215,22 @@ def main():
     btns = ttk.Frame(frame)
     btns.pack(fill="x")
 
-    def launch_and_close(script_name: str):
-        ok = _run_script(_script_path(script_name))
-        try:
-            root.destroy()
-        except Exception:
-            pass
-
     ttk.Button(
         btns,
         text="Open Bitmap SVG Converter",
-        command=lambda: launch_and_close("GUI_bitmap_converter.py"),
+        command=lambda: _run_tool("bitmap"),
     ).pack(fill="x", pady=(0, SMALL_MARGIN))
 
     ttk.Button(
         btns,
         text="Open SVG Pixel Optimizer",
-        command=lambda: launch_and_close("GUI_svg_optimizer.py"),
+        command=lambda: _run_tool("optimizer"),
     ).pack(fill="x", pady=(0, SMALL_MARGIN))
 
     ttk.Button(
         btns,
         text="Open SVG Exporter",
-        command=lambda: launch_and_close("GUI_svg_exporter.py"),
+        command=lambda: _run_tool("exporter"),
     ).pack(fill="x")
 
     root.mainloop()
