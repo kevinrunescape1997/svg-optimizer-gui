@@ -1,9 +1,7 @@
 # SVG Pixel-Rect Optimizer (GUI)
 
 Cross-platform GUI tool for optimizing **pixel art stored as SVG `<rect>` elements**.
-It reduces file size and rect count by merging adjacent pixels while preserving visual fidelity. It is mainly ment to be used in conjunction with this tool: https://www.scalablepixels.com
-
-scalablepixels.com is made by Roy Tettero (https://www.roytettero.com), so full credit to him for that. 
+It reduces file size and rect count by merging adjacent pixels while preserving visual fidelity.
 
 This project consists of:
 
