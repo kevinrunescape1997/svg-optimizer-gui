@@ -57,7 +57,6 @@ def _run_tool(tool: str) -> bool:
     """
     try:
         if getattr(sys, "frozen", False):
-            # Spawn a new instance of this executable with a flag that selects the tool.
             subprocess.Popen([sys.executable, f"--run={tool}"], close_fds=True)
             return True
         else:
@@ -215,22 +214,30 @@ def main():
     btns = ttk.Frame(frame)
     btns.pack(fill="x")
 
+    def launch_and_close(tool: str):
+        ok = _run_tool(tool)
+        if ok:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
     ttk.Button(
         btns,
         text="Open Bitmap SVG Converter",
-        command=lambda: _run_tool("bitmap"),
+        command=lambda: launch_and_close("bitmap"),
     ).pack(fill="x", pady=(0, SMALL_MARGIN))
 
     ttk.Button(
         btns,
         text="Open SVG Pixel Optimizer",
-        command=lambda: _run_tool("optimizer"),
+        command=lambda: launch_and_close("optimizer"),
     ).pack(fill="x", pady=(0, SMALL_MARGIN))
 
     ttk.Button(
         btns,
         text="Open SVG Exporter",
-        command=lambda: _run_tool("exporter"),
+        command=lambda: launch_and_close("exporter"),
     ).pack(fill="x")
 
     root.mainloop()

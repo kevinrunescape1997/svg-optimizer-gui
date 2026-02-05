@@ -520,11 +520,14 @@ class App:
         if self._raise_existing_launcher():
             return
         try:
-            script = Path(__file__).resolve().parent / "vector_pixel_tools_launcher.py"
-            if not script.exists():
-                messagebox.showerror("Launcher not found", f"Could not find:\n{script}")
-                return
-            subprocess.Popen([sys.executable, str(script)], close_fds=True)
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable], close_fds=True)
+            else:
+                script = Path(__file__).resolve().parent / "vector_pixel_tools_launcher.py"
+                if not script.exists():
+                    messagebox.showerror("Launcher not found", f"Could not find:\n{script}")
+                    return
+                subprocess.Popen([sys.executable, str(script)], close_fds=True)
         except Exception as e:
             messagebox.showerror("Open failed", f"Could not open tools launcher:\n{e}")
 
