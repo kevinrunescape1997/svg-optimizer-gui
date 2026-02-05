@@ -1,0 +1,1 @@
+OK   | /home/kev/Documents/light.svg -> /home/kev/vector-pixel-tools/optimized_svgs/light.svg | OK | paths=498 | svg=12,077 bytes

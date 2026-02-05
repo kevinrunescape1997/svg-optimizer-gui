@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Owner: kevinrunescape1997
+# Purpose: GUI for exporting SVG/SVGZ to EPS/PDF/TIFF/PNG; preserves progress and UX.
+
 """
 GUI for exporting SVG/SVGZ to EPS/PDF/TIFF/PNG.
 
@@ -235,10 +238,9 @@ class App:
 
         self.files: list[Path] = []
 
-        # Settings
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "svg_exports"))
-        self.recursive = tk.BooleanVar(value=True)        # used when scanning folders
-        self.preserve_tree = tk.BooleanVar(value=True)    # toggle added to UI
+        self.recursive = tk.BooleanVar(value=True)
+        self.preserve_tree = tk.BooleanVar(value=True)
 
         self.rename_all = tk.BooleanVar(value=False)
         self.rename_base = tk.StringVar(value="")
@@ -246,9 +248,8 @@ class App:
         self.custom_stem = tk.StringVar(value="")
 
         self.output_format = tk.StringVar(value="pdf")
-        self.dpi = tk.StringVar(value="300")  # High-quality default DPI
+        self.dpi = tk.StringVar(value="300")
 
-        # Status / progress
         self.status = tk.StringVar(value="Ready.")
         self.progress = tk.DoubleVar(value=0.0)
         self._pb_style_name = "Success.Horizontal.TProgressbar"
@@ -256,13 +257,11 @@ class App:
         self.pct_places: int = 1
         self._current_file_idx: int = 0
 
-        # Drag & drop panel colors
         self._drop_bg = DROP_BG
         self._drop_bg_hover = DROP_BG_HOVER
 
         self._widget_open = False
 
-        # Control refs
         self.header_open_btn: ttk.Button | None = None
         self.run_btn: ttk.Button | None = None
         self.btn_add_files: ttk.Button | None = None
@@ -272,16 +271,13 @@ class App:
         self.btn_choose_out: ttk.Button | None = None
         self.btn_up: ttk.Button | None = None
 
-        # Scrollbars and files viewer grip
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
-        self.lb_grip: tk.Widget | None = None  # custom vertical-only grip for files viewer
+        self.lb_grip: tk.Widget | None = None
 
-        # Vertical resize tracking for files viewer
         self._lb_resize_start_y: int = 0
         self._lb_row0_minsize: int = 0
 
-        # Preview label
         self.naming_preview: ttk.Label | None = None
 
         self._build_ui()
@@ -388,7 +384,6 @@ class App:
         self.pb = ttk.Progressbar(header, variable=self.progress, maximum=100.0, style=self._pb_style_name)
         self.pb.grid(row=0, column=1, sticky="ew", padx=(10, 10))
 
-        # Percent overlay with file counter
         self.pct_label = ttk.Label(header, text="0.0% • File 0/0", foreground="#ffffff")
         try:
             self.pct_label.place(in_=self.pb, relx=0.5, rely=0.5, anchor="center")
@@ -404,7 +399,6 @@ class App:
         sep_line = tk.Frame(container, height=2, bg=DARK_BORDER, bd=0, highlightthickness=0)
         sep_line.pack(fill="x")
 
-        # Match optimizer layout: a single ScrollableFrame containing the list area and options
         self.sc = ScrollableFrame(container)
         self.sc.pack(fill="both", expand=True)
 
@@ -427,17 +421,15 @@ class App:
         style_scrollbar(self.lb_hsb)
         self.lb_hsb.grid(row=1, column=1, sticky="ew")
 
-        # Bottom-left custom vertical-only grip for files viewer (mirrored icon)
         self.lb_grip = tk.Label(
             lb_wrap,
-            text="◣",  # mirrored corner glyph for bottom-left
+            text="◣",
             bg=DARK_BG, fg=DARK_TEXT_MUTED,
             width=2,
             cursor="sb_v_double_arrow",
         )
         self.lb_grip.grid(row=1, column=0, sticky="sw")
 
-        # Initialize the vertical-only resizing behavior for the list area
         self.root.update_idletasks()
         self._init_listbox_vertical_resizer(lb_wrap)
 
@@ -496,7 +488,7 @@ class App:
 
         fmt = ttk.Frame(fmt_wrap)
         fmt.pack(fill="x", pady=(TOGGLE_ROW_SPACING, 0))
-        formats = sorted(SUPPORTED_FORMATS)  # e.g. ['eps', 'pdf', 'png', 'tiff']
+        formats = sorted(SUPPORTED_FORMATS)
         for i, f in enumerate(formats):
             ttk.Radiobutton(
                 fmt,
@@ -504,7 +496,7 @@ class App:
                 value=f,
                 variable=self.output_format,
                 style="OnOff.TRadiobutton",
-            ).pack(side="left", padx=(0 if i == 0 else 8, 0))  # spacing between toggles
+            ).pack(side="left", padx=(0 if i == 0 else 8, 0))
 
         dpi_row = ttk.Frame(fmt_wrap)
         dpi_row.pack(fill="x", pady=(TOGGLE_ROW_SPACING, 0))
@@ -531,13 +523,10 @@ class App:
         self.naming_preview.pack(fill="x")
 
     def _init_listbox_vertical_resizer(self, lb_wrap: ttk.Frame):
-        """Initialize vertical-only resizing of the list area via a custom grip."""
-        # Set an initial minimum height for the list row (row 0)
         initial = max(180, self.listbox.winfo_reqheight())
         lb_wrap.rowconfigure(0, minsize=initial)
         self._lb_row0_minsize = initial
 
-        # Bind drag handlers on the grip
         if self.lb_grip is not None:
             self.lb_grip.bind("<Button-1>", lambda e: self._start_lb_resize(e))
             self.lb_grip.bind("<B1-Motion>", lambda e, wrap=lb_wrap: self._perform_lb_resize(e, wrap))
@@ -555,7 +544,6 @@ class App:
             pass
 
     def _end_lb_resize(self, event, lb_wrap: ttk.Frame):
-        # Persist the new minsize as the baseline for the next drag
         try:
             current_h = max(120, self.listbox.winfo_height())
             self._lb_row0_minsize = current_h
@@ -817,7 +805,6 @@ class App:
         self._refresh_listbox()
 
     def _compute_output_stem(self, inp: Path, file_index_zero_based: int) -> str:
-        """Compute output stem based on rename/stem settings (consistent with optimizer)."""
         cust = self.custom_stem.get().strip()
         if self.rename_all.get() and self.rename_base.get().strip():
             base = self.rename_base.get().strip()
@@ -906,8 +893,6 @@ class App:
             except Exception:
                 pass
 
-            # Stage-based progress for current job:
-            # 10% prepare, 80% conversion, 10% finalize
             def _set_overall(frac: float):
                 pct = base_pct_for_prev + frac * per_file_span
                 self.root.after(0, self.progress.set, pct)
@@ -930,7 +915,6 @@ class App:
                 results.append(JobResult(inp, out_path, False, msg))
                 self.root.after(0, self._set_progress_style, False)
 
-            # Complete this file slot
             _set_overall(1.0)
 
         self.root.after(0, self._finish, results, Path(self.output_dir.get()).expanduser())

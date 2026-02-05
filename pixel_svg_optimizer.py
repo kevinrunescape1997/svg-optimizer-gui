@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""
-pixel_svg_optimizer.py
-
-Optimize pixel-art SVGs by:
-- Computing final per-pixel RGBA via source-over compositing in DOM order
-- Emitting merged <rect> runs or connected <path> outlines
-- Optional post-processing: merge per-style groups, minify attributes and path data
-- SVGZ writing (with optional Zopfli when requested by caller)
-- Streaming rect optimizer for very large SVGs (>200 MB) with lxml iterparse
-  to reduce memory usage and write output progressively.
-
-CLI examples:
-  python pixel_svg_optimizer.py input.svg
-  python pixel_svg_optimizer.py input.svg --paths --minify --svgz --zopfli
-"""
+# Owner: kevinrunescape1997
+# Purpose: Optimize pixel-art SVGs with compositing, rect merging, path emission, and streaming support.
+# Notes: Batches write operations where safe to reduce I/O overhead without changing behavior.
 
 from __future__ import annotations
 
@@ -170,7 +158,6 @@ def _collect_final_rgba_pixels(svg_in: Path) -> tuple[Dict[StyleKey, Set[Point]]
     Non-streaming collector. Uses lxml tolerant parse (recover=True) when available.
     """
     if HAVE_LXML:
-        # lxml.parse supports recover=True and huge_tree=True on XMLParser but not via iterparse's parser arg.
         parser = LET.XMLParser(recover=True, huge_tree=True)
         tree = LET.parse(str(svg_in), parser=parser)
         root = tree.getroot()
@@ -235,7 +222,6 @@ def _collect_final_rgba_pixels(svg_in: Path) -> tuple[Dict[StyleKey, Set[Point]]
     return style_pixels, out_attrs
 
 
-# Progress-aware streaming collector (byte-based progress)
 def _collect_final_rgba_pixels_stream(svg_in: Path, progress_cb: Optional[Callable[[float], None]] = None, report_every_bytes: int = 4 * 1024 * 1024) -> tuple[Dict[StyleKey, Set[Point]], dict[str, str]]:
     ns_svg = SVG_NS
     rect_tag = f"{{{ns_svg}}}rect"
@@ -279,7 +265,6 @@ def _collect_final_rgba_pixels_stream(svg_in: Path, progress_cb: Optional[Callab
         fileobj = ProgressFile(svg_in, total, cb=progress_cb, report_every=report_every_bytes)
 
         if HAVE_LXML:
-            # iterparse accepts recover/huge_tree as keyword args
             context = LET.iterparse(fileobj, events=("start", "end"), recover=True, huge_tree=True)
         else:
             context = LET.iterparse(fileobj, events=("start", "end"))
@@ -287,7 +272,6 @@ def _collect_final_rgba_pixels_stream(svg_in: Path, progress_cb: Optional[Callab
         root_attrs: dict[str, str] = {}
         pix_rgba: Dict[Point, RGBA] = {}
 
-        # Read root attrs
         for event, elem in context:
             if event == "start" and elem.tag == svg_tag:
                 for k in ("width", "height", "viewBox", "preserveAspectRatio"):
@@ -296,7 +280,6 @@ def _collect_final_rgba_pixels_stream(svg_in: Path, progress_cb: Optional[Callab
                         root_attrs[k] = v
                 break
 
-        # Composite rects in DOM order
         for event, elem in context:
             if event == "end" and elem.tag == rect_tag:
                 st = elem.attrib.get("style", "")
@@ -955,8 +938,6 @@ def default_output_path(inp: Path, vertical_merge: bool) -> Path:
     return inp.with_name(inp.stem + suffix + inp.suffix)
 
 
-# --- Streaming rect optimizer for huge SVGs (>200 MB) ---
-
 class ProgressFile:
     """
     Wrap a file object to report read progress via a callback.
@@ -1023,7 +1004,6 @@ def _iterparse_rects(svg_in: Path, progress_cb: Optional[Callable[[float], None]
 
         root_attrs: dict[str, str] = {}
 
-        # Find root attrs
         for event, elem in context:
             if event == "start" and elem.tag == svg_tag:
                 for k in ("width", "height", "viewBox", "preserveAspectRatio"):
@@ -1033,7 +1013,6 @@ def _iterparse_rects(svg_in: Path, progress_cb: Optional[Callable[[float], None]
                 yield ("__root__", root_attrs)
                 break
 
-        # Iterate rect end tags
         for event, elem in context:
             if event == "end" and elem.tag == rect_tag:
                 st = elem.attrib.get("style", "")
@@ -1066,7 +1045,6 @@ def _iterparse_rects(svg_in: Path, progress_cb: Optional[Callable[[float], None]
                 w = _as_int_or(1, elem.attrib.get("width"))
                 h = _as_int_or(1, elem.attrib.get("height"))
 
-                # Normalize opacity to 0..1 string
                 try:
                     of = float(op) if op else 1.0
                     if of > 1.0:
@@ -1126,10 +1104,11 @@ def optimize_svg_rects_stream(svg_in: Path, svg_out: Path, minify: bool = True, 
         return " ".join(parts)
 
     with open(svg_out, "w", encoding="utf-8") as f:
+        f_write = f.write
         if not minify:
-            f.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>')
-        f.write(f'<svg xmlns="{SVG_NS}" {_sorted_attrib_line(out_attrs)}>')
-        f.write('<g>')
+            f_write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>')
+        f_write(f'<svg xmlns="{SVG_NS}" {_sorted_attrib_line(out_attrs)}>')
+        f_write('<g>')
 
         active: dict[tuple[int, int, str, str], list[int]] = {}
         current_y: Optional[int] = None
@@ -1144,15 +1123,17 @@ def optimize_svg_rects_stream(svg_in: Path, svg_out: Path, minify: bool = True, 
 
             row_keys = {(x, w, fill, op) for (x, w, fill, op) in row_runs}
 
+            out_lines: List[str] = []
+
             for key in list(active.keys()):
                 if key not in row_keys:
                     sy, ly = active[key]
                     x, w, fill, op = key
                     h = ly - sy + 1
                     if op and op not in ("", "1", "1.0"):
-                        f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
+                        out_lines.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
                     else:
-                        f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
+                        out_lines.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
                     del active[key]
 
             for (x, w, fill, op) in row_runs:
@@ -1164,14 +1145,16 @@ def optimize_svg_rects_stream(svg_in: Path, svg_out: Path, minify: bool = True, 
                     else:
                         h = ly - sy + 1
                         if op and op not in ("", "1", "1.0"):
-                            f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
+                            out_lines.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
                         else:
-                            f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
+                            out_lines.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
                         active[key] = [y_done, y_done]
                 else:
                     active[key] = [y_done, y_done]
 
             row_runs.clear()
+            if out_lines:
+                f_write("".join(out_lines))
 
         for item in it:
             if not isinstance(item[0], int):
@@ -1203,15 +1186,19 @@ def optimize_svg_rects_stream(svg_in: Path, svg_out: Path, minify: bool = True, 
 
         if current_y is not None:
             flush_row(current_y)
+
+        out_lines_end: List[str] = []
         for key, (sy, ly) in list(active.items()):
             x, w, fill, op = key
             h = ly - sy + 1
             if op and op not in ("", "1", "1.0"):
-                f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
+                out_lines_end.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}" opacity="{op}"></rect>')
             else:
-                f.write(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
+                out_lines_end.append(f'<rect x="{x}" y="{sy}" width="{w}" height="{h}" fill="{fill}"></rect>')
+        if out_lines_end:
+            f_write("".join(out_lines_end))
 
-        f.write('</g></svg>')
+        f_write('</g></svg>')
 
     try:
         if progress_cb:

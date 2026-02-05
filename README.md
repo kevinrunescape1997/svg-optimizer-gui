@@ -11,6 +11,25 @@ This suite is ideal for rect‑based pixel art SVGs and vector export pipelines.
 
 ---
 
+## Repository layout (current files)
+
+- `copilot-instructions.md` — coding standards and assistant protocol
+- Launcher:
+  - `vector_pixel_tools_launcher.py`
+- Bitmap → SVG Converter:
+  - `GUI_bitmap_converter.py` (GUI)
+  - `bitmap_svg_converter.py` (CLI/core)
+- SVG Pixel Optimizer:
+  - `GUI_svg_optimizer.py` (GUI)
+  - `pixel_svg_optimizer.py` (CLI/core)
+- SVG Exporter:
+  - `GUI_svg_exporter.py` (GUI)
+  - `svg_exporter.py` (CLI/core)
+- Documentation:
+  - `README.md`
+
+---
+
 ## Tools Overview
 
 ### 1) Bitmap → SVG Converter
@@ -133,35 +152,4 @@ python GUI_svg_exporter.py
 Run the launcher:
 ```bash
 python vector_pixel_tools_launcher.py
-```
-
----
-
-## Build Artifacts (CI)
-
-GitHub Actions build platform‑specific launchers from the central entry point `vector_pixel_tools_launcher.py`:
-
-- Windows: single‑file `.exe` zipped
-- macOS: `.app` zipped
-- Linux: `.AppImage`
-
-Workflows:
-- `.github/workflows/build.yml` (on push to `main`)
-  - Optional input: `include_tkinterdnd2` to bundle drag & drop support
-- `.github/workflows/release.yml` (on tags `v*` or manual run)
-  - Inputs:
-    - `tag` (manual release tag, e.g., `v1.0.2`)
-    - `include_tkinterdnd2` to bundle drag & drop support
-  - Creates a GitHub Release and uploads assets (Windows zip, macOS zip, Linux AppImage, README)
-
----
-
-## Local Build (PyInstaller)
-
-You can build locally with PyInstaller (see workflows for reference). Example (Windows one‑file):
-```bash
-pip install pyinstaller pillow
-# Optional drag & drop:
-pip install tkinterdnd2
-pyinstaller --noconfirm --clean --windowed --onefile --name vector_pixel_tools_launcher vector_pixel_tools_launcher.py
 ```

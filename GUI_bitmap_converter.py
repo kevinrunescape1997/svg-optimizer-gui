@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Owner: kevinrunescape1997
+# Purpose: GUI for bitmap → SVG conversion; preserves progress and UX. Converter batched writes handled in backend.
+
 """
 GUI for converting bitmaps (PNG/JPEG/GIF/BMP/TIFF/WebP/AVIF/HEIF/HEIC/JXL/EXR/HDR/…)
 to pixel-accurate SVG using rect-per-pixel.
@@ -40,7 +43,6 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image
 
-# Import converter functions
 try:
     from bitmap_svg_converter import (
         open_image,
@@ -49,10 +51,8 @@ try:
 except Exception as e:
     raise RuntimeError(f"Failed to import bitmap_svg_converter. Make sure it is in PYTHONPATH. Error: {e}")
 
-# Single-instance raise port used by the launcher
 LAUNCHER_PORT = 51262
 
-# Dark theme and layout constants
 SMALL_MARGIN = 8
 TOGGLE_ROW_SPACING = 12
 
@@ -171,6 +171,14 @@ def find_bitmaps_in_folder(folder: Path, recursive: bool) -> list[Path]:
     return sorted(out)
 
 
+@dataclass
+class JobResult:
+    input_path: Path
+    output_svg: Path
+    ok: bool
+    message: str
+
+
 class ScrollableFrame(ttk.Frame):
     """Canvas-backed frame with vertical/horizontal scrolling."""
     def __init__(self, master, **kwargs):
@@ -223,14 +231,6 @@ class ScrollableFrame(ttk.Frame):
             self.canvas.xview_moveto(0.0)
 
 
-@dataclass
-class JobResult:
-    input_path: Path
-    output_svg: Path
-    ok: bool
-    message: str
-
-
 class App:
     """GUI for bitmap → SVG conversion."""
     def _get_winid(self) -> int | None:
@@ -267,6 +267,7 @@ class App:
 
         self.files: list[Path] = []
 
+        # Settings
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "bitmap_svgs"))
         self.recursive = tk.BooleanVar(value=True)
         self.preserve_tree = tk.BooleanVar(value=True)
@@ -276,18 +277,21 @@ class App:
         self.use_custom_stem = tk.BooleanVar(value=False)
         self.custom_stem = tk.StringVar(value="")
 
+        # Status / progress
         self.status = tk.StringVar(value="Ready.")
         self.progress = tk.DoubleVar(value=0.0)
         self._pb_style_name = "Success.Horizontal.TProgressbar"
-        # Percentage label overlay and precision
         self.pct_label: ttk.Label | None = None
         self.pct_places: int = 1  # number of decimal places in percent label (0..n)
 
+        # Drag & drop panel colors
         self._drop_bg = DROP_BG
         self._drop_bg_hover = DROP_BG_HOVER
 
+        # Modal lock
         self._widget_open = False
 
+        # Control refs
         self.header_open_btn: ttk.Button | None = None
         self.run_btn: ttk.Button | None = None
         self.btn_add_files: ttk.Button | None = None
@@ -297,17 +301,19 @@ class App:
         self.btn_choose_out: ttk.Button | None = None
         self.btn_up: ttk.Button | None = None
 
+        # Scrollbar refs and custom vertical grip for files viewer
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
-        self.lb_grip: tk.Widget | None = None  # bottom-left vertical-only grip for files viewer
+        self.lb_grip: tk.Widget | None = None  # bottom-left vertical-only grip
 
-        # Track current file index for display in percent overlay
+        # Track current file index for display
         self._current_file_idx: int = 0
 
         # Vertical resize tracking for files viewer
         self._lb_resize_start_y: int = 0
         self._lb_row0_minsize: int = 0
 
+        # Preview label
         self.naming_preview: ttk.Label | None = None
 
         self._build_ui()
@@ -419,7 +425,6 @@ class App:
             self.pct_label.place(in_=self.pb, relx=0.5, rely=0.5, anchor="center")
         except Exception:
             self.pct_label.grid(row=0, column=1, sticky="e", padx=(0, 10))
-
 
         self.run_btn = ttk.Button(header, text="Convert", command=self._guard(self.run), style="Primary.TButton")
         self.run_btn.grid(row=0, column=2, sticky="e", pady=(0, SMALL_MARGIN))
@@ -680,7 +685,6 @@ class App:
             self.listbox.insert(tk.END, str(p))
         self.status.set(f"{len(self.files)} file(s) queued.")
         self._update_naming_preview()
-        # refresh the overlay counts (File i/total • total queued)
         self._update_pct_label()
 
     def _add_paths(self, paths: list[Path]):
@@ -883,7 +887,7 @@ class App:
         if not hasattr(self, "naming_preview"):
             return
         lines: list[str] = []
-        lines.append("GIFs append a per-frame suffix: _frame_00000, _frame_00001, etc.")
+        lines.append("Multi-frame formats (GIF/TIFF/WebP/AVIF/HEIF/JXL) append a per-frame suffix: _frame_00000, _frame_00001, etc.")
         if not self.files:
             lines.append("Preview: No files queued.")
         else:
@@ -905,7 +909,6 @@ class App:
                         lines.append(f"Preview: {p.name} -> {stem}_frame_00000.svg, {stem}_frame_00001.svg, …")
                     else:
                         lines.append(f"Preview: {p.name} -> {stem}.svg")
-            lines.append("Multi-frame formats export all frames when supported by the backend (GIF/TIFF/WebP/AVIF/HEIF/JXL).")
         self.naming_preview.configure(text="\n".join(lines))
 
     def _wire_preview_updates(self):

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Owner: kevinrunescape1997
+# Purpose: Launcher GUI for bitmap converter, SVG optimizer, and exporter. Single-instance raise; robust spawns.
+
 """
 Launcher GUI with three buttons:
 - Open Bitmap → SVG Converter
@@ -54,25 +57,16 @@ def _run_tool(tool: str) -> bool:
     Start the requested tool in a new process.
 
     - In frozen mode (PyInstaller/AppImage), spawn the SAME executable with --run=<tool>.
-      We resolve the executable robustly:
-        * If running as AppImage (Linux), prefer the outer AppImage via $APPIMAGE.
-        * Otherwise, prefer the on-disk path (sys.argv[0]); fall back to sys.executable.
-      We also avoid immediate handle closure on Windows.
     - In dev/unfrozen mode, run the corresponding .py script with the system Python.
     """
     try:
         if getattr(sys, "frozen", False):
-            # Resolve executable path robustly per platform/packager.
             exe = None
             appimage = os.environ.get("APPIMAGE")
             if sys.platform.startswith("linux") and appimage:
-                # Running inside an AppImage -> relaunch the AppImage itself.
                 exe = appimage
             else:
-                # Prefer the on-disk launcher path when available.
                 exe = sys.argv[0] or sys.executable
-
-            # On Windows, close_fds=True can interact poorly in some environments.
             close_fds = (sys.platform != "win32")
             subprocess.Popen([exe, f"--run={tool}"], close_fds=close_fds)
             return True
@@ -111,7 +105,6 @@ def _start_raise_server(root: tk.Tk):
         srv.bind(("127.0.0.1", LAUNCHER_PORT))
         srv.listen(5)
     except OSError:
-        # Another instance likely owns the port; send RAISE to it and exit.
         try:
             with socket.create_connection(("127.0.0.1", LAUNCHER_PORT), timeout=0.5) as s:
                 s.sendall(b"RAISE\n")
@@ -153,7 +146,6 @@ def _setup_theme(root: tk.Tk):
             if t in style.theme_names():
                 style.theme_use(t)
                 break
-        # Dark styling
         root.configure(bg=DARK_BG)
         style.configure("TFrame", background=DARK_BG, bordercolor=DARK_BORDER)
         style.configure("TLabel", background=DARK_BG, foreground=DARK_TEXT, bordercolor=DARK_BORDER)
@@ -214,7 +206,6 @@ def _dispatch_run_flag() -> bool:
 
 
 def main():
-    # If called with --run=<tool>, dispatch directly to that GUI.
     if _dispatch_run_flag():
         return
 
@@ -223,7 +214,6 @@ def main():
     root.geometry("600x200")
     _setup_theme(root)
 
-    # Start single-instance raise server (or exit if another is already running)
     _start_raise_server(root)
 
     frame = ttk.Frame(root, padding=16)
@@ -235,7 +225,6 @@ def main():
     def launch_and_close(tool: str):
         ok = _run_tool(tool)
         if ok:
-            # Give the child a brief moment to initialize before we tear down the launcher.
             try:
                 root.after(250, root.destroy)
             except Exception:

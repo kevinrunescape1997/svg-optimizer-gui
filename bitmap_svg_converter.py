@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Owner: kevinrunescape1997
+# Purpose: Convert pixel bitmaps to pixel-accurate SVG (<rect> per pixel) with per-row batched writes.
+
 """
 Convert pixel bitmaps to pixel-accurate SVG using <rect> per pixel.
 
@@ -101,7 +104,6 @@ def _normalize_to_uint8(arr):
     if arr.dtype == np.uint8:
         return arr
     a = arr.astype(np.float32)
-    # Robust scaling with percentiles to avoid extreme outliers
     lo = float(np.nanpercentile(a, 1.0))
     hi = float(np.nanpercentile(a, 99.0))
     if hi <= lo:
@@ -119,7 +121,6 @@ def _numpy_to_pil_rgba(arr) -> Image.Image:
     """Convert numpy array (H,W) or (H,W,C) to PIL RGBA."""
     _require_numpy_for("Image conversion")
     if arr.ndim == 2:
-        # Grayscale -> L -> RGBA
         a8 = _normalize_to_uint8(arr)
         im = Image.fromarray(a8, mode="L").convert("RGBA")
         return im
@@ -134,7 +135,6 @@ def _numpy_to_pil_rgba(arr) -> Image.Image:
             im = Image.fromarray(a8, mode="RGB").convert("RGBA")
             return im
         elif c == 2:
-            # Two channels -> treat first as intensity, second could be alpha
             base = _normalize_to_uint8(arr[:, :, 0])
             alpha = _normalize_to_uint8(arr[:, :, 1])
             rgb = np.stack([base, base, base, alpha], axis=-1)
@@ -155,11 +155,9 @@ def _read_with_imageio(path: str, frame_index: int) -> Optional[Image.Image]:
     if iio is None:
         return None
     try:
-        # imageio.v3 supports index parameter for multi-image formats
         arr = iio.imread(path, index=frame_index)
         return _numpy_to_pil_rgba(arr)
     except Exception:
-        # Try single frame without index
         try:
             arr = iio.imread(path)
             return _numpy_to_pil_rgba(arr)
@@ -175,7 +173,6 @@ def _read_dicom(path: str) -> Optional[Image.Image]:
         if not hasattr(ds, "pixel_array"):
             return None
         arr = ds.pixel_array
-        # Some DICOMs use Photometric Interpretation; keep simple intensity/RGB
         if np is None:
             return None
         if arr.ndim == 3 and arr.shape[-1] in (3, 4):
@@ -191,7 +188,6 @@ def _read_fits(path: str) -> Optional[Image.Image]:
         return None
     try:
         with fits.open(path, memmap=True) as hdul:
-            # Prefer primary data; else first image HDU with data
             data = None
             if hdul and hdul[0].data is not None:
                 data = hdul[0].data
@@ -203,9 +199,7 @@ def _read_fits(path: str) -> Optional[Image.Image]:
             if data is None:
                 return None
             arr = np.asarray(data)
-            # FITS often stores (C,H,W) or (H,W); normalize to (H,W) grayscale for simplicity
             if arr.ndim == 3:
-                # Pick first channel
                 arr = arr[0]
             return _numpy_to_pil_rgba(arr)
     except Exception:
@@ -221,7 +215,7 @@ def _read_raw(path: str) -> Optional[Image.Image]:
                 output_bps=8,
                 no_auto_bright=True,
                 use_camera_wb=True,
-                gamma=(1, 1),  # keep linear-ish
+                gamma=(1, 1),
             )
             return _numpy_to_pil_rgba(rgb)
     except Exception:
@@ -234,14 +228,9 @@ def open_image(path: str, frame_index: int = 0) -> Image.Image:
 
     Strategy:
     1) Try Pillow (plus registered plugins). If multi-frame, seek frame_index.
-    2) If Pillow fails, try specialized loaders based on file extension:
-       - DICOM (.dcm) -> pydicom
-       - FITS (.fits/.fit/.fts) -> astropy
-       - RAW camera formats -> rawpy
-       - Other formats -> imageio (EXR, HDR, PFM, SGI, DDS, KTX/KTX2, etc. if supported)
+    2) If Pillow fails, try specialized loaders based on file extension.
     3) If all fail, raise a helpful error indicating which package to install.
     """
-    # First try Pillow
     try:
         im = Image.open(path)
         try:
@@ -255,7 +244,6 @@ def open_image(path: str, frame_index: int = 0) -> Image.Image:
 
     ext = Path(path).suffix.lower()
 
-    # Specialized loaders
     if ext == ".dcm":
         im = _read_dicom(path)
         if im is not None:
@@ -268,7 +256,6 @@ def open_image(path: str, frame_index: int = 0) -> Image.Image:
             return im
         raise RuntimeError("Failed to read FITS. Please install: pip install astropy numpy")
 
-    # RAW camera formats
     raw_exts = {
         ".cr2", ".nef", ".arw", ".rw2", ".dng", ".orf", ".raf", ".sr2", ".pef", ".srw", ".rwl", ".nrw",
         ".3fr", ".fff", ".mef",
@@ -279,12 +266,10 @@ def open_image(path: str, frame_index: int = 0) -> Image.Image:
             return im
         raise RuntimeError("Failed to read RAW file. Please install: pip install rawpy numpy")
 
-    # Generic attempt via imageio
     im = _read_with_imageio(path, frame_index)
     if im is not None:
         return im
 
-    # Guidance based on common problematic formats
     hints = {
         ".exr": "OpenEXR may require imageio with appropriate plugins. Try: pip install imageio numpy",
         ".hdr": "HDR/RGBE may require imageio FreeImage backend. Try: pip install imageio numpy",
@@ -311,8 +296,9 @@ def emit_svg_header(f, svg_id: str, width: int, height: int, scale: int):
     Write the SVG header with the requested id, dimensions, and viewBox.
     We keep 1 unit per pixel in the viewBox and scale rendered size via width/height.
     """
-    f.write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>')
-    f.write(
+    write = f.write
+    write('<?xml version="1.0" encoding="UTF-8" standalone="no"?>')
+    write(
         f'<svg xmlns="http://www.w3.org/2000/svg" id="{svg_id}" '
         f'width="{width * scale}" height="{height * scale}" '
         f'viewBox="0 0 {width} {height}" preserveAspectRatio="xMidYMid meet">'
@@ -335,9 +321,17 @@ def write_rect(f, x: int, y: int, w: int, h: int, fill_hex: str, alpha: int):
     )
 
 
+def _rect_str(x: int, y: int, w: int, h: int, fill_hex: str, alpha: int) -> str:
+    """Return the <rect> element string."""
+    return (
+        f'<rect id="{x}-{y}" x="{x}" y="{y}" width="{w}" height="{h}" '
+        f'shape-rendering="crispEdges" style="fill:{fill_hex};opacity:{alpha};"></rect>'
+    )
+
+
 def generate_svg_per_pixel(im: Image.Image, out_path: str, svg_id: str, scale: int, progress_cb: Optional[callable] = None):
     """
-    Generate one rect per visible pixel.
+    Generate one rect per visible pixel with batched row writes to reduce I/O overhead.
 
     If progress_cb is provided, it will be called as progress_cb(rows_done, total_rows)
     once per row, allowing callers (e.g., GUI) to update a progress indicator.
@@ -345,14 +339,18 @@ def generate_svg_per_pixel(im: Image.Image, out_path: str, svg_id: str, scale: i
     width, height = im.size
     pixels = im.load()
     with open(out_path, "w", encoding="utf-8") as f:
+        write = f.write
         emit_svg_header(f, svg_id, width, height, scale)
         for y in range(height):
+            row_parts: list[str] = []
             for x in range(width):
                 r, g, b, a = pixels[x, y]
                 if a == 0:
                     continue
                 fill_hex = rgba_to_hex(r, g, b)
-                write_rect(f, x, y, 1, 1, fill_hex, a)
+                row_parts.append(_rect_str(x, y, 1, 1, fill_hex, a))
+            if row_parts:
+                write("".join(row_parts))
             if progress_cb:
                 try:
                     progress_cb(y + 1, height)

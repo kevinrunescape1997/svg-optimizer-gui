@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# Owner: kevinrunescape1997
+# Purpose: GUI for SVG optimization; preserves streaming and progress behavior.
+
 import os
 import shutil
 import subprocess
@@ -21,19 +24,15 @@ from pixel_svg_optimizer import (
     LARGE_BYTES,                         # Threshold: 200 MB
 )
 
-# Port used by the launcher for single-instance raise-to-front messages
 LAUNCHER_PORT = 51262
 
-# Layout spacing
 SMALL_MARGIN = 8
 TOGGLE_ROW_SPACING = 12
 
-# Primary button
 PRIMARY_BG = "#0072B2"
 PRIMARY_BG_ACTIVE = "#1f8ed6"
 PRIMARY_FG = "#ffffff"
 
-# Dark theme palette
 DARK_BG = "#1B1F23"
 DARK_SURFACE = "#2D333B"
 DARK_SURFACE_ALT = "#22272E"
@@ -42,11 +41,9 @@ DARK_TEXT_MUTED = "#95A7B8"
 DARK_BORDER = "#3A4149"
 DARK_SCROLL_TROUGH = DARK_SURFACE
 
-# Drag & drop colors
 DROP_BG = "#3B4854"
 DROP_BG_HOVER = "#465260"
 
-# Scrollbar
 SCROLLBAR_THICKNESS = 26
 
 
@@ -129,7 +126,6 @@ def system_pick_files(title: str, patterns: list[str], parent_winid: int | None 
 
 
 def style_scrollbar(sb: tk.Scrollbar):
-    """Apply dark theme colors to a classic tk.Scrollbar (best-effort across platforms)."""
     for opts in (
         dict(bg=DROP_BG, activebackground=DROP_BG_HOVER, troughcolor=DARK_SCROLL_TROUGH, highlightthickness=0, bd=0, relief="flat"),
         dict(bg=DROP_BG, activebackground=DROP_BG_HOVER, highlightthickness=0, bd=0, relief="flat"),
@@ -147,7 +143,6 @@ def style_scrollbar(sb: tk.Scrollbar):
 
 
 class ScrollableFrame(ttk.Frame):
-    """Canvas-backed frame with vertical/horizontal scrolling."""
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
 
@@ -209,7 +204,6 @@ class App:
             return None
 
     def _guard(self, fn):
-        """Prevent opening new modals/widgets while one is already open."""
         def _wrapped(*args, **kwargs):
             if self._widget_open:
                 return
@@ -235,7 +229,6 @@ class App:
 
         self.files: list[Path] = []
 
-        # Settings
         self.output_dir = tk.StringVar(value=str(Path.cwd() / "optimized_svgs"))
         self.recursive = tk.BooleanVar(value=True)
         self.preserve_tree = tk.BooleanVar(value=True)
@@ -244,29 +237,23 @@ class App:
         self.use_custom_stem = tk.BooleanVar(value=False)
         self.custom_stem = tk.StringVar(value="")
         self.skip_outputs = tk.BooleanVar(value=True)
-        self.output_mode = tk.StringVar(value="svg")  # svg / svgz / svgz_only
-        self.use_paths = tk.BooleanVar(value=True)    # True -> connected paths; False -> rects
+        self.output_mode = tk.StringVar(value="svg")
+        self.use_paths = tk.BooleanVar(value=True)
         self.minify = tk.BooleanVar(value=True)
 
-        # Status
         self.status = tk.StringVar(value="Ready.")
         self.progress = tk.DoubleVar(value=0.0)
         self._pb_style_name = "Success.Horizontal.TProgressbar"
-        # Percent overlay label and precision
         self.pct_label: ttk.Label | None = None
-        self.pct_places: int = 1  # number of decimal places
+        self.pct_places: int = 1
 
-        # Track current file index for display
         self._current_file_idx: int = 0
 
-        # Drag & drop panel colors
         self._drop_bg = DROP_BG
         self._drop_bg_hover = DROP_BG_HOVER
 
-        # Modal lock
         self._widget_open = False
 
-        # Control refs
         self.header_open_btn: ttk.Button | None = None
         self.run_btn: ttk.Button | None = None
         self.btn_add_files: ttk.Button | None = None
@@ -276,19 +263,15 @@ class App:
         self.btn_choose_out: ttk.Button | None = None
         self.btn_up: ttk.Button | None = None
 
-        # Scrollbar refs and custom vertical grip for files viewer
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
-        self.lb_grip: tk.Widget | None = None  # bottom-left vertical-only grip
+        self.lb_grip: tk.Widget | None = None
 
-        # Vertical resize tracking for files viewer
         self._lb_resize_start_y: int = 0
         self._lb_row0_minsize: int = 0
 
-        # Toggle widget refs
         self.cb_use_paths: ttk.Checkbutton | None = None
 
-        # Preview label
         self.naming_preview: ttk.Label | None = None
 
         self._build_ui()
@@ -394,7 +377,6 @@ class App:
 
         self.pb = ttk.Progressbar(header, variable=self.progress, maximum=100.0, style=self._pb_style_name)
         self.pb.grid(row=0, column=1, sticky="ew", padx=(10, 10))
-        # Percent overlay label centered on the progressbar, showing percent, current file counter
         self.pct_label = ttk.Label(header, text="0.0% • File 0/0", foreground="#ffffff")
         try:
             self.pct_label.place(in_=self.pb, relx=0.5, rely=0.5, anchor="center")
@@ -438,17 +420,15 @@ class App:
         style_scrollbar(self.lb_hsb)
         self.lb_hsb.grid(row=1, column=1, sticky="ew")
 
-        # Bottom-left custom vertical-only grip for the files viewer (mirrored icon)
         self.lb_grip = tk.Label(
             lb_wrap,
-            text="◣",  # mirrored corner glyph
+            text="◣",
             bg=DARK_BG, fg=DARK_TEXT_MUTED,
             width=2,
             cursor="sb_v_double_arrow",
         )
         self.lb_grip.grid(row=1, column=0, sticky="sw")
 
-        # Initialize vertical-only resizing for the list area
         self.root.update_idletasks()
         self._init_listbox_vertical_resizer(lb_wrap)
 
@@ -535,7 +515,6 @@ class App:
         self.naming_preview.pack(fill="x")
 
     def _init_listbox_vertical_resizer(self, lb_wrap: ttk.Frame):
-        """Initialize vertical-only resizing of the list area via a custom grip."""
         initial = max(180, self.listbox.winfo_reqheight())
         lb_wrap.rowconfigure(0, minsize=initial)
         self._lb_row0_minsize = initial
@@ -736,7 +715,6 @@ class App:
                 pass
 
     def _with_modal_lock(self, fn):
-        """Disable actionable controls while a picker or modal is open; prevent opening additional modals."""
         if self._widget_open:
             return None
         self._widget_open = True
@@ -823,7 +801,6 @@ class App:
         self._enforce_large_file_policy()
 
     def _compute_output_stem(self, inp: Path, file_index_zero_based: int) -> str:
-        """Compute output stem based on rename/stem settings."""
         cust = self.custom_stem.get().strip()
         if self.rename_all.get() and self.rename_base.get().strip():
             base = self.rename_base.get().strip()
@@ -885,10 +862,6 @@ class App:
         self._update_pct_label(0.0)
 
     def _enforce_large_file_policy(self) -> None:
-        """
-        If any single queued file is >= LARGE_BYTES, disable 'paths' mode and the toggle,
-        and inform the user via status text.
-        """
         any_large = False
         for p in self.files:
             try:
@@ -937,7 +910,7 @@ class App:
         write_svgz_flag = mode in ("svgz", "svgz_only")
         use_paths = self.use_paths.get()
         minify = self.minify.get()
-        use_zopfli = True  # only for small files
+        use_zopfli = True
 
         common_root = None
         if preserve_tree:
@@ -963,7 +936,6 @@ class App:
 
             out_svgz: Path | None = None
 
-            # Ensure determinate mode for progress
             try:
                 self.root.after(0, self.pb.configure, {"mode": "determinate"})
             except Exception:
@@ -972,28 +944,22 @@ class App:
             try:
                 out_svg.parent.mkdir(parents=True, exist_ok=True)
 
-                # Detect large file for streaming fallback
                 is_large = False
                 try:
                     is_large = inp.stat().st_size >= LARGE_BYTES
                 except Exception:
                     is_large = False
 
-                # Overall progress base for this file in the queue
                 base_pct = ((idx1 - 1) / max(1, total)) * 100.0
 
                 def _update_overall(pct_file_stage: float, stage_weight: float = 100.0):
-                    # Map per-file stage progress (0..100) into overall percent
                     overall = base_pct + (pct_file_stage * stage_weight) / max(1, total)
                     self.root.after(0, self.progress.set, overall)
                     self.root.after(0, self._update_pct_label, overall)
 
-                # Update status with per-file counter
                 self.root.after(0, self.status.set, f"Processing {idx1}/{total}: {inp.name}")
 
                 if is_large:
-                    # Large files: progress from streaming parse/write (byte-based)
-                    # Allocate 95% of this file's span to parse/optimize, 5% to gzip (if enabled)
                     parse_weight = 95.0
                     gzip_weight = 5.0
 
@@ -1013,11 +979,9 @@ class App:
                         write_svgz_stream_from_svg(out_svg, out_svgz, compresslevel=9, progress_cb=gz_cb)
                         msg += " | svgz=(stream gzip)"
                     else:
-                        # Ensure we complete this file's slot
                         _update_overall(100.0, stage_weight=parse_weight)
 
                 else:
-                    # Small files: byte-based progress via streaming collector inside bytes-mode
                     parse_weight = 95.0
                     gzip_weight = 5.0
 
@@ -1052,7 +1016,6 @@ class App:
                 results.append(JobResult(inp, out_svg, None, False, str(e)))
                 self.root.after(0, self._set_progress_style, False)
 
-            # Snap to end of this file’s span and refresh label
             try:
                 pct_done = (idx1 / max(1, total)) * 100.0
                 self.root.after(0, self.progress.set, pct_done)
