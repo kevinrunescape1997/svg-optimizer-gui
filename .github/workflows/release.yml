@@ -30,7 +30,7 @@ jobs:
 
     env:
       PYTHON_VERSION: "3.10"
-      APP_NAME: "svg_pixel_rect_optimizer_gui"
+      APP_NAME: "vector_pixel_tools_launcher"
       INCLUDE_DND: ${{ github.event_name == 'workflow_dispatch' && inputs.include_tkinterdnd2 || 'true' }}
 
     steps:
@@ -65,13 +65,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $args = @("--noconfirm","--clean","--windowed","--onefile","--name",$env:APP_NAME,"svg_optimizer_gui.py")
+          $args = @("--noconfirm","--clean","--windowed","--onefile","--name",$env:APP_NAME,"vector_pixel_tools_launcher.py")
           if ($env:INCLUDE_DND -eq "true") {
             $args += @("--hidden-import","tkinterdnd2","--collect-data","tkinterdnd2","--collect-binaries","tkinterdnd2")
           }
           pyinstaller @args
           Compress-Archive -Path "dist\$env:APP_NAME.exe" -DestinationPath "$env:APP_NAME-Windows.zip" -Force
-
 
       - name: Upload build artifact (Windows)
         if: runner.os == 'Windows'
@@ -87,7 +86,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          ARGS=(--noconfirm --clean --windowed --name "$APP_NAME" svg_optimizer_gui.py)
+          ARGS=(--noconfirm --clean --windowed --name "$APP_NAME" vector_pixel_tools_launcher.py)
           if [[ "$INCLUDE_DND" == "true" ]]; then
             ARGS+=(--hidden-import tkinterdnd2 --collect-data tkinterdnd2 --collect-binaries tkinterdnd2)
           fi
@@ -95,7 +94,6 @@ jobs:
           pyinstaller "${ARGS[@]}"
 
           zip -r "${APP_NAME}-macOS.zip" "dist/${APP_NAME}.app"
-
 
       - name: Upload build artifact (macOS)
         if: runner.os == 'macOS'
@@ -111,7 +109,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          ARGS=(--noconfirm --clean --windowed --onefile --name "$APP_NAME" svg_optimizer_gui.py)
+          ARGS=(--noconfirm --clean --windowed --onefile --name "$APP_NAME" vector_pixel_tools_launcher.py)
           if [[ "$INCLUDE_DND" == "true" ]]; then
             ARGS+=(--hidden-import tkinterdnd2 --collect-data tkinterdnd2 --collect-binaries tkinterdnd2)
           fi
@@ -131,7 +129,7 @@ jobs:
           img = Image.new("RGBA", (256, 256), (32, 32, 32, 255))
           d = ImageDraw.Draw(img)
           d.rectangle([24, 24, 232, 232], outline=(200, 200, 200, 255), width=6)
-          d.text((40, 110), "SVG", fill=(240, 240, 240, 255))
+          d.text((36, 110), "Vector Pixel", fill=(240, 240, 240, 255))
           img.save("icon.png")
           PY
           cp icon.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png"
@@ -139,7 +137,7 @@ jobs:
           cat > "$APPDIR/usr/share/applications/${APP_NAME}.desktop" <<EOF
           [Desktop Entry]
           Type=Application
-          Name=SVG Pixel-Rect Optimizer
+          Name=Vector Pixel Tools Launcher
           Exec=${APP_NAME}
           Icon=${APP_NAME}
           Categories=Utility;Graphics;
@@ -169,7 +167,7 @@ jobs:
     needs: build
 
     env:
-      APP_NAME: "svg_pixel_rect_optimizer_gui"
+      APP_NAME: "vector_pixel_tools_launcher"
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
@@ -193,4 +191,3 @@ jobs:
             ${{ env.APP_NAME }}-macOS.zip
             ${{ env.APP_NAME }}-Linux-x86_64.AppImage
             README.md
-
