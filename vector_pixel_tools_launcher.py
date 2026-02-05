@@ -8,7 +8,7 @@ Launcher GUI with three buttons:
 - Open SVG → EPS/PDF/TIFF/PNG Exporter
 
 Starts each tool in its own process:
-- Frozen (PyInstaller): spawns the same executable with a --run=<tool> flag
+- Frozen (PyInstaller/AppImage): spawns the same executable with a --run=<tool> flag
 - Unfrozen (dev): runs the corresponding .py script with the system Python
 
 Single-instance behavior:
@@ -17,6 +17,7 @@ Single-instance behavior:
 - The GUIs also send 'RAISE' before attempting to start a new launcher.
 """
 
+import os
 import subprocess
 import sys
 import socket
@@ -53,11 +54,27 @@ def _run_tool(tool: str) -> bool:
     Start the requested tool in a new process.
 
     - In frozen mode (PyInstaller/AppImage), spawn the SAME executable with --run=<tool>.
+      We resolve the executable robustly:
+        * If running as AppImage (Linux), prefer the outer AppImage via $APPIMAGE.
+        * Otherwise, prefer the on-disk path (sys.argv[0]); fall back to sys.executable.
+      We also avoid immediate handle closure on Windows.
     - In dev/unfrozen mode, run the corresponding .py script with the system Python.
     """
     try:
         if getattr(sys, "frozen", False):
-            subprocess.Popen([sys.executable, f"--run={tool}"], close_fds=True)
+            # Resolve executable path robustly per platform/packager.
+            exe = None
+            appimage = os.environ.get("APPIMAGE")
+            if sys.platform.startswith("linux") and appimage:
+                # Running inside an AppImage -> relaunch the AppImage itself.
+                exe = appimage
+            else:
+                # Prefer the on-disk launcher path when available.
+                exe = sys.argv[0] or sys.executable
+
+            # On Windows, close_fds=True can interact poorly in some environments.
+            close_fds = (sys.platform != "win32")
+            subprocess.Popen([exe, f"--run={tool}"], close_fds=close_fds)
             return True
         else:
             script_name = TOOL_SCRIPT_MAP.get(tool)
@@ -160,16 +177,17 @@ def _setup_theme(root: tk.Tk):
 
 def _dispatch_run_flag() -> bool:
     """
-    If invoked with --run=<tool>, import the selected GUI and run it in this process.
+    If invoked with --run=<tool> or --run <tool>, import the selected GUI and run it in this process.
     Returns True if a tool was dispatched, False otherwise.
     """
+    args = sys.argv[1:]
     mode = None
-    for i, arg in enumerate(sys.argv[1:]):
+    for i, arg in enumerate(args):
         if arg.startswith("--run="):
             mode = arg.split("=", 1)[1].strip()
             break
-        if arg == "--run" and i + 2 <= len(sys.argv):
-            mode = sys.argv[i + 2]
+        if arg == "--run" and i + 1 < len(args):
+            mode = args[i + 1].strip()
             break
     if not mode:
         return False
@@ -217,10 +235,14 @@ def main():
     def launch_and_close(tool: str):
         ok = _run_tool(tool)
         if ok:
+            # Give the child a brief moment to initialize before we tear down the launcher.
             try:
-                root.destroy()
+                root.after(250, root.destroy)
             except Exception:
-                pass
+                try:
+                    root.destroy()
+                except Exception:
+                    pass
 
     ttk.Button(
         btns,
