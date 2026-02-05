@@ -21,6 +21,10 @@ Optional format backends for broader support (install on demand):
 This GUI wraps functions from bitmap_svg_converter.py:
 - open_image
 - generate_svg_per_pixel
+
+Files viewer resize changes:
+- Replace ttk.Sizegrip in the files viewer with a custom vertical-only grip that resizes just the list area.
+- Use a mirrored corner glyph “◣” so the icon faces the opposite way.
 """
 
 import os
@@ -295,9 +299,16 @@ class App:
 
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
+        self.lb_grip: tk.Widget | None = None  # bottom-left vertical-only grip for files viewer
 
         # Track current file index for display in percent overlay
         self._current_file_idx: int = 0
+
+        # Vertical resize tracking for files viewer
+        self._lb_resize_start_y: int = 0
+        self._lb_row0_minsize: int = 0
+
+        self.naming_preview: ttk.Label | None = None
 
         self._build_ui()
         self._enable_dnd_if_available()
@@ -447,6 +458,20 @@ class App:
         style_scrollbar(self.lb_hsb)
         self.lb_hsb.grid(row=1, column=1, sticky="ew")
 
+        # Bottom-left custom vertical-only grip for files viewer (mirrored icon)
+        self.lb_grip = tk.Label(
+            lb_wrap,
+            text="◣",  # mirrored corner glyph for bottom-left
+            bg=DARK_BG, fg=DARK_TEXT_MUTED,
+            width=2,
+            cursor="sb_v_double_arrow",
+        )
+        self.lb_grip.grid(row=1, column=0, sticky="sw")
+
+        # Initialize vertical-only resizing for the list area
+        self.root.update_idletasks()
+        self._init_listbox_vertical_resizer(lb_wrap)
+
         self.listbox.configure(yscrollcommand=self.lb_vsb.set, xscrollcommand=self.lb_hsb.set)
         self.lb_vsb.configure(command=self.listbox.yview)
         self.lb_hsb.configure(command=self.listbox.xview)
@@ -521,6 +546,35 @@ class App:
 
         self.naming_preview = ttk.Label(opt_wrap, text="", foreground=DARK_TEXT_MUTED, padding=(0, 4))
         self.naming_preview.pack(fill="x")
+
+    def _init_listbox_vertical_resizer(self, lb_wrap: ttk.Frame):
+        """Initialize vertical-only resizing of the list area via a custom grip."""
+        initial = max(180, self.listbox.winfo_reqheight())
+        lb_wrap.rowconfigure(0, minsize=initial)
+        self._lb_row0_minsize = initial
+
+        if self.lb_grip is not None:
+            self.lb_grip.bind("<Button-1>", lambda e: self._start_lb_resize(e))
+            self.lb_grip.bind("<B1-Motion>", lambda e, wrap=lb_wrap: self._perform_lb_resize(e, wrap))
+            self.lb_grip.bind("<ButtonRelease-1>", lambda e, wrap=lb_wrap: self._end_lb_resize(e, wrap))
+
+    def _start_lb_resize(self, event):
+        self._lb_resize_start_y = event.y_root
+
+    def _perform_lb_resize(self, event, lb_wrap: ttk.Frame):
+        dy = event.y_root - self._lb_resize_start_y
+        newsize = max(120, self._lb_row0_minsize + dy)
+        try:
+            lb_wrap.rowconfigure(0, minsize=int(newsize))
+        except Exception:
+            pass
+
+    def _end_lb_resize(self, event, lb_wrap: ttk.Frame):
+        try:
+            current_h = max(120, self.listbox.winfo_height())
+            self._lb_row0_minsize = current_h
+        except Exception:
+            pass
 
     def _raise_existing_launcher(self) -> bool:
         try:
@@ -809,14 +863,21 @@ class App:
         self._refresh_listbox()
 
     def _compute_output_stem(self, inp: Path, file_index_zero_based: int) -> str:
-        base = (self.rename_base.get().strip() if self.rename_all.get() and self.rename_base.get().strip()
-                else inp.stem)
-        stem = base
+        """
+        Compute output stem based on rename/stem settings.
+
+        Behavior:
+        - If "Custom name all" is enabled AND a base name is provided, use that base,
+          optionally appending the custom stem, and add the sequential _00000 index.
+        - Otherwise, use the file's original stem, optionally appending the custom stem.
+        """
         cust = self.custom_stem.get().strip()
-        if self.use_custom_stem.get() and cust:
-            stem += f"_{cust}"
-        stem += f"_{file_index_zero_based:05d}"
-        return stem
+        if self.rename_all.get() and self.rename_base.get().strip():
+            base = self.rename_base.get().strip()
+            stem = f"{base}_{cust}" if (self.use_custom_stem.get() and cust) else base
+            return f"{stem}_{file_index_zero_based:05d}"
+        stem = inp.stem
+        return f"{stem}_{cust}" if (self.use_custom_stem.get() and cust) else stem
 
     def _update_naming_preview(self) -> None:
         if not hasattr(self, "naming_preview"):

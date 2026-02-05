@@ -15,6 +15,10 @@ Adds:
 - Live naming preview (first few outputs)
 - Layout matches optimizer (ScrollableFrame; correct scrollbar/sizegrip placement)
 - "Export format" renamed to "Output options"
+
+Files viewer resize changes:
+- Replace ttk.Sizegrip in the files viewer with a custom vertical-only grip that resizes just the list area.
+- Use a mirrored corner glyph “◣” so the icon faces the opposite way.
 """
 
 import os
@@ -268,9 +272,14 @@ class App:
         self.btn_choose_out: ttk.Button | None = None
         self.btn_up: ttk.Button | None = None
 
-        # Scrollbars
+        # Scrollbars and files viewer grip
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
+        self.lb_grip: tk.Widget | None = None  # custom vertical-only grip for files viewer
+
+        # Vertical resize tracking for files viewer
+        self._lb_resize_start_y: int = 0
+        self._lb_row0_minsize: int = 0
 
         # Preview label
         self.naming_preview: ttk.Label | None = None
@@ -386,7 +395,6 @@ class App:
         except Exception:
             self.pct_label.grid(row=0, column=1, sticky="e", padx=(0, 10))
 
-
         self.run_btn = ttk.Button(header, text="Export", command=self._guard(self.run), style="Primary.TButton")
         self.run_btn.grid(row=0, column=2, sticky="e", pady=(0, SMALL_MARGIN))
 
@@ -418,6 +426,20 @@ class App:
         self.lb_hsb = tk.Scrollbar(lb_wrap, orient="horizontal", width=SCROLLBAR_THICKNESS)
         style_scrollbar(self.lb_hsb)
         self.lb_hsb.grid(row=1, column=1, sticky="ew")
+
+        # Bottom-left custom vertical-only grip for files viewer (mirrored icon)
+        self.lb_grip = tk.Label(
+            lb_wrap,
+            text="◣",  # mirrored corner glyph for bottom-left
+            bg=DARK_BG, fg=DARK_TEXT_MUTED,
+            width=2,
+            cursor="sb_v_double_arrow",
+        )
+        self.lb_grip.grid(row=1, column=0, sticky="sw")
+
+        # Initialize the vertical-only resizing behavior for the list area
+        self.root.update_idletasks()
+        self._init_listbox_vertical_resizer(lb_wrap)
 
         self.listbox.configure(yscrollcommand=self.lb_vsb.set, xscrollcommand=self.lb_hsb.set)
         self.lb_vsb.configure(command=self.listbox.yview)
@@ -507,6 +529,38 @@ class App:
 
         self.naming_preview = ttk.Label(fmt_wrap, text="", foreground=DARK_TEXT_MUTED, padding=(0, 4))
         self.naming_preview.pack(fill="x")
+
+    def _init_listbox_vertical_resizer(self, lb_wrap: ttk.Frame):
+        """Initialize vertical-only resizing of the list area via a custom grip."""
+        # Set an initial minimum height for the list row (row 0)
+        initial = max(180, self.listbox.winfo_reqheight())
+        lb_wrap.rowconfigure(0, minsize=initial)
+        self._lb_row0_minsize = initial
+
+        # Bind drag handlers on the grip
+        if self.lb_grip is not None:
+            self.lb_grip.bind("<Button-1>", lambda e: self._start_lb_resize(e))
+            self.lb_grip.bind("<B1-Motion>", lambda e, wrap=lb_wrap: self._perform_lb_resize(e, wrap))
+            self.lb_grip.bind("<ButtonRelease-1>", lambda e, wrap=lb_wrap: self._end_lb_resize(e, wrap))
+
+    def _start_lb_resize(self, event):
+        self._lb_resize_start_y = event.y_root
+
+    def _perform_lb_resize(self, event, lb_wrap: ttk.Frame):
+        dy = event.y_root - self._lb_resize_start_y
+        newsize = max(120, self._lb_row0_minsize + dy)
+        try:
+            lb_wrap.rowconfigure(0, minsize=int(newsize))
+        except Exception:
+            pass
+
+    def _end_lb_resize(self, event, lb_wrap: ttk.Frame):
+        # Persist the new minsize as the baseline for the next drag
+        try:
+            current_h = max(120, self.listbox.winfo_height())
+            self._lb_row0_minsize = current_h
+        except Exception:
+            pass
 
     def _raise_existing_launcher(self) -> bool:
         try:
@@ -797,13 +851,6 @@ class App:
                 lines.append(f"Preview: {p.name} -> {stem}{suffix}")
 
         self.naming_preview.configure(text="\n".join(lines))
-
-    def _bind_progress_percentage(self) -> None:
-        try:
-            self.progress.trace_add("write", lambda *_: self._update_pct_label())
-        except Exception:
-            pass
-        self._update_pct_label(0.0)
 
     def run(self):
         if not self.files:

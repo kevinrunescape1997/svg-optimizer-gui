@@ -276,12 +276,20 @@ class App:
         self.btn_choose_out: ttk.Button | None = None
         self.btn_up: ttk.Button | None = None
 
-        # Scrollbar refs
+        # Scrollbar refs and custom vertical grip for files viewer
         self.lb_vsb: tk.Scrollbar | None = None
         self.lb_hsb: tk.Scrollbar | None = None
+        self.lb_grip: tk.Widget | None = None  # bottom-left vertical-only grip
+
+        # Vertical resize tracking for files viewer
+        self._lb_resize_start_y: int = 0
+        self._lb_row0_minsize: int = 0
 
         # Toggle widget refs
         self.cb_use_paths: ttk.Checkbutton | None = None
+
+        # Preview label
+        self.naming_preview: ttk.Label | None = None
 
         self._build_ui()
         self._enable_dnd_if_available()
@@ -430,6 +438,20 @@ class App:
         style_scrollbar(self.lb_hsb)
         self.lb_hsb.grid(row=1, column=1, sticky="ew")
 
+        # Bottom-left custom vertical-only grip for the files viewer (mirrored icon)
+        self.lb_grip = tk.Label(
+            lb_wrap,
+            text="◣",  # mirrored corner glyph
+            bg=DARK_BG, fg=DARK_TEXT_MUTED,
+            width=2,
+            cursor="sb_v_double_arrow",
+        )
+        self.lb_grip.grid(row=1, column=0, sticky="sw")
+
+        # Initialize vertical-only resizing for the list area
+        self.root.update_idletasks()
+        self._init_listbox_vertical_resizer(lb_wrap)
+
         self.listbox.configure(yscrollcommand=self.lb_vsb.set, xscrollcommand=self.lb_hsb.set)
         self.lb_vsb.configure(command=self.listbox.yview)
         self.lb_hsb.configure(command=self.listbox.xview)
@@ -485,11 +507,11 @@ class App:
 
         fmt = ttk.Frame(fmt_wrap)
         fmt.pack(fill="x", pady=(TOGGLE_ROW_SPACING, 0))
+        self.cb_use_paths = ttk.Checkbutton(fmt_wrap, text="Merge touching like-pixels into connected paths", variable=self.use_paths, style="OnOff.TCheckbutton")
         ttk.Radiobutton(fmt, text="Optimized SVG (.svg)", value="svg", variable=self.output_mode, style="OnOff.TRadiobutton").pack(side="left")
         ttk.Radiobutton(fmt, text="Optimized SVGZ (.svgz)", value="svgz_only", variable=self.output_mode, style="OnOff.TRadiobutton").pack(side="left", padx=(8, 0))
         ttk.Radiobutton(fmt, text="Optimized SVG (.svg) + SVGZ (.svgz)", value="svgz", variable=self.output_mode, style="OnOff.TRadiobutton").pack(side="left", padx=(8, 0))
 
-        self.cb_use_paths = ttk.Checkbutton(fmt_wrap, text="Merge touching like-pixels into connected paths", variable=self.use_paths, style="OnOff.TCheckbutton")
         self.cb_use_paths.pack(anchor="w", pady=(TOGGLE_ROW_SPACING, 0))
         ttk.Checkbutton(fmt_wrap, text="Post-process to merge same-color shapes and minify", variable=self.minify, style="OnOff.TCheckbutton").pack(anchor="w", pady=(TOGGLE_ROW_SPACING, 0))
 
@@ -511,6 +533,35 @@ class App:
 
         self.naming_preview = ttk.Label(fmt_wrap, text="", foreground=DARK_TEXT_MUTED, padding=(0, 4))
         self.naming_preview.pack(fill="x")
+
+    def _init_listbox_vertical_resizer(self, lb_wrap: ttk.Frame):
+        """Initialize vertical-only resizing of the list area via a custom grip."""
+        initial = max(180, self.listbox.winfo_reqheight())
+        lb_wrap.rowconfigure(0, minsize=initial)
+        self._lb_row0_minsize = initial
+
+        if self.lb_grip is not None:
+            self.lb_grip.bind("<Button-1>", lambda e: self._start_lb_resize(e))
+            self.lb_grip.bind("<B1-Motion>", lambda e, wrap=lb_wrap: self._perform_lb_resize(e, wrap))
+            self.lb_grip.bind("<ButtonRelease-1>", lambda e, wrap=lb_wrap: self._end_lb_resize(e, wrap))
+
+    def _start_lb_resize(self, event):
+        self._lb_resize_start_y = event.y_root
+
+    def _perform_lb_resize(self, event, lb_wrap: ttk.Frame):
+        dy = event.y_root - self._lb_resize_start_y
+        newsize = max(120, self._lb_row0_minsize + dy)
+        try:
+            lb_wrap.rowconfigure(0, minsize=int(newsize))
+        except Exception:
+            pass
+
+    def _end_lb_resize(self, event, lb_wrap: ttk.Frame):
+        try:
+            current_h = max(120, self.listbox.winfo_height())
+            self._lb_row0_minsize = current_h
+        except Exception:
+            pass
 
     def _raise_existing_launcher(self) -> bool:
         try:
@@ -1128,7 +1179,7 @@ class App:
                 subprocess.run(["xdg-open", str(p)], check=False)
         except Exception:
             messagebox.showerror("Open failed", f"Could not open:\n{p}")
-
+        
 
 def main():
     dnd = _try_get_dnd()
