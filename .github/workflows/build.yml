@@ -63,7 +63,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path "dist\ghostscript" | Out-Null
           Copy-Item -Recurse "$($gsRoot.FullName)\bin" "dist\ghostscript\bin"
           Copy-Item -Recurse "$($gsRoot.FullName)\lib" "dist\ghostscript\lib"
-          # Include license
           if (Test-Path "$($gsRoot.FullName)\LICENSE") {
             Copy-Item "$($gsRoot.FullName)\LICENSE" "dist\ghostscript\LICENSE"
           }
@@ -75,14 +74,14 @@ jobs:
           $args = @(
             "--noconfirm","--clean","--windowed","--onefile",
             "--name",$env:APP_NAME,
-            # Ensure GUI modules are bundled
+            # Bundle GUIs and cores
             "--hidden-import","GUI_bitmap_converter",
             "--hidden-import","GUI_svg_optimizer",
             "--hidden-import","GUI_svg_exporter",
             "--hidden-import","bitmap_svg_converter",
             "--hidden-import","pixel_svg_optimizer",
             "--hidden-import","svg_exporter",
-            # Bundle CairoSVG and core deps explicitly
+            # Bundle CairoSVG Python deps explicitly
             "--hidden-import","cairosvg",
             "--hidden-import","cairocffi",
             "--hidden-import","cssselect2",
@@ -118,7 +117,7 @@ jobs:
                 --hidden-import bitmap_svg_converter
                 --hidden-import pixel_svg_optimizer
                 --hidden-import svg_exporter
-                # Bundle CairoSVG and core deps explicitly
+                # Bundle CairoSVG Python deps explicitly
                 --hidden-import cairosvg
                 --hidden-import cairocffi
                 --hidden-import cssselect2
@@ -155,7 +154,7 @@ jobs:
                 --hidden-import bitmap_svg_converter
                 --hidden-import pixel_svg_optimizer
                 --hidden-import svg_exporter
-                # Bundle CairoSVG and core deps explicitly
+                # Bundle CairoSVG Python deps explicitly
                 --hidden-import cairosvg
                 --hidden-import cairocffi
                 --hidden-import cssselect2
@@ -196,7 +195,6 @@ jobs:
           Terminal=false
           EOF
 
-          # appimagetool expects these at the AppDir root
           cp "$APPDIR/usr/share/applications/${APP_NAME}.desktop" "$APPDIR/${APP_NAME}.desktop"
           cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/${APP_NAME}.png" "$APPDIR/${APP_NAME}.png"
 
@@ -205,8 +203,6 @@ jobs:
           curl -L -o appimagetool.AppImage \
             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool.AppImage
-
-          # Avoid FUSE requirement by extracting
           ./appimagetool.AppImage --appimage-extract >/dev/null
           ./squashfs-root/AppRun "$APPDIR" "${APP_NAME}-Linux-x86_64.AppImage"
 

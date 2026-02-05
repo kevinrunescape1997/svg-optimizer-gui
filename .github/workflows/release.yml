@@ -74,7 +74,7 @@ jobs:
             Copy-Item "$($gsRoot.FullName)\LICENSE" "dist\ghostscript\LICENSE"
           }
 
-      # Windows -> zip exe
+      # Windows -> zip exe (+ bundled ghostscript)
       - name: Build (Windows) -> zip exe
         if: runner.os == 'Windows'
         shell: pwsh
@@ -88,7 +88,7 @@ jobs:
             "--hidden-import","bitmap_svg_converter",
             "--hidden-import","pixel_svg_optimizer",
             "--hidden-import","svg_exporter",
-            # Bundle CairoSVG and core deps explicitly
+            # Bundle CairoSVG Python deps
             "--hidden-import","cairosvg",
             "--hidden-import","cairocffi",
             "--hidden-import","cssselect2",
@@ -123,7 +123,7 @@ jobs:
                 --hidden-import bitmap_svg_converter
                 --hidden-import pixel_svg_optimizer
                 --hidden-import svg_exporter
-                # Bundle CairoSVG and core deps explicitly
+                # Bundle CairoSVG Python deps
                 --hidden-import cairosvg
                 --hidden-import cairocffi
                 --hidden-import cssselect2
@@ -136,7 +136,7 @@ jobs:
 
           pyinstaller "${ARGS[@]}"
 
-          zip -r "${APPNAME}-macOS.zip" "dist/${APP_NAME}.app"
+          zip -r "${APP_NAME}-macOS.zip" "dist/${APP_NAME}.app"
 
       - name: Upload build artifact (macOS)
         if: runner.os == 'macOS'
@@ -159,7 +159,7 @@ jobs:
                 --hidden-import bitmap_svg_converter
                 --hidden-import pixel_svg_optimizer
                 --hidden-import svg_exporter
-                # Bundle CairoSVG and core deps explicitly
+                # Bundle CairoSVG Python deps
                 --hidden-import cairosvg
                 --hidden-import cairocffi
                 --hidden-import cssselect2
